@@ -3,7 +3,7 @@
 using System;
 // using System.ComponentModel.DataAnnotations;
 
-namespace StudentPerformance.Api.Models.DTOs
+namespace StudentPerformance.Api.Models.Requests
 {
     public class UpdateSubjectRequest
     {

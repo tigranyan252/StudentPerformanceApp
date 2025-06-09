@@ -1,17 +1,27 @@
 ﻿// Path: StudentPerformance.Api/Models/DTOs/GroupDto.cs
 
-namespace StudentPerformance.Api.Models.DTOs
+using System; // Необходим, если у вас есть поля DateTime в DTO
+using System.ComponentModel.DataAnnotations; // Для [Required], [MaxLength]
+
+namespace StudentPerformance.Api.Models.DTOs // Убедитесь, что namespace соответствует остальным DTO
 {
-    /// <summary>
-    /// Data Transfer Object for Group entities.
-    /// This DTO represents the basic information of an academic group or class.
-    /// </summary>
     public class GroupDto
     {
-        public int GroupId { get; set; } // The unique identifier for the group
+        public int GroupId { get; set; }
 
-        public string Name { get; set; } = string.Empty; // The full name of the group (e.g., "Software Engineering 2024")
+        // НОВОЕ/ИСПРАВЛЕНО: Это свойство ожидается в MappingProfile для имени группы
+        [Required]
+        [MaxLength(100)]
+        public string GroupName { get; set; } = string.Empty;
 
-        public string Code { get; set; } = string.Empty; // A short code for the group (e.g., "SE2024A")
+        [Required]
+        [MaxLength(20)]
+        public string Code { get; set; } = string.Empty;
+
+        [MaxLength(500)]
+        public string? Description { get; set; }
+
+        public DateTime CreatedAt { get; set; }
+        public DateTime? UpdatedAt { get; set; }
     }
 }

@@ -2,7 +2,7 @@
 
 using System.ComponentModel.DataAnnotations;
 
-namespace StudentPerformance.Api.Models.DTOs
+namespace StudentPerformance.Api.Models.Requests
 {
     /// <summary>
     /// Data Transfer Object for requesting the update of an existing Teacher-Subject-Group-Semester assignment.

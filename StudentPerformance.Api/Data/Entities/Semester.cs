@@ -20,6 +20,10 @@ namespace StudentPerformance.Api.Data.Entities
         [MaxLength(100)] // Соответствует nvarchar(100)
         public string Name { get; set; } = string.Empty; // Название семестра (например, "Осенний 2023")
 
+        // ДОБАВЛЕНО: Код семестра
+        [MaxLength(20)] // Максимальная длина, например, "FAL2023", "SPR2024"
+        public string? Code { get; set; } // Код семестра (может быть null, если необязателен)
+
         // Дата начала семестра, рекомендуется сделать обязательным
         [Required] // Рекомендация: сделать обязательным
         public DateTime StartDate { get; set; } // Соответствует DATE NOT NULL
@@ -27,6 +31,9 @@ namespace StudentPerformance.Api.Data.Entities
         // Дата окончания семестра, рекомендуется сделать обязательным
         [Required] // Рекомендация: сделать обязательным
         public DateTime EndDate { get; set; } // Соответствует DATE NOT NULL
+
+        // ДОБАВЛЕНО: Флаг активности семестра
+        public bool IsActive { get; set; } // По умолчанию false, если не указано иное
 
         // Поля для аудита (необязательно, но полезно)
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow; // Дата создания записи

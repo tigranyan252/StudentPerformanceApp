@@ -1,149 +1,174 @@
-﻿// Path: Controllers/SubjectsController.cs
+﻿// Path: StudentPerformance.Api/Controllers/SubjectsController.cs
 
 using Microsoft.AspNetCore.Mvc;
-using StudentPerformance.Api.Services; // Now for ISubjectService, IUserService (if still needed for general user checks)
 using StudentPerformance.Api.Models.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using StudentPerformance.Api.Models.Requests;
+using StudentPerformance.Api.Services.Interfaces; // ИСПРАВЛЕНО: Используем интерфейсы
+using System; // ДОБАВЛЕНО: Для UnauthorizedAccessException, ArgumentException, InvalidOperationException
+using static StudentPerformance.Api.Utilities.UserRoles; // ДОБАВЛЕНО: Для доступа к константам ролей
 
 namespace StudentPerformance.Api.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    [Authorize]
+    [Authorize] // Авторизация на уровне контроллера для всех методов по умолчанию
     public class SubjectsController : ControllerBase
     {
-        // Inject ISubjectService
         private readonly ISubjectService _subjectService;
-        // If you still need IUserService for other *general* user operations (not subject-specific authorization), keep it.
-        // private readonly IUserService _userService;
+        private readonly IUserService _userService; // ДОБАВЛЕНО: Для общих проверок авторизации
 
-        public SubjectsController(ISubjectService subjectService /*, IUserService userService if needed */)
+        public SubjectsController(ISubjectService subjectService, IUserService userService) // ДОБАВЛЕНО: Инъекция IUserService
         {
             _subjectService = subjectService;
-            // _userService = userService;
+            _userService = userService; // Инициализация
+        }
+
+        // Вспомогательный метод для получения ID текущего пользователя
+        private int GetCurrentUserId()
+        {
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+
+            if (userIdClaim != null && int.TryParse(userIdClaim.Value, out int userId))
+            {
+                return userId;
+            }
+
+            throw new UnauthorizedAccessException("User ID claim not found or is invalid.");
         }
 
         [HttpGet]
-        [Authorize(Roles = "Администратор,Преподаватель,Студент")]
-        public async Task<ActionResult<IEnumerable<SubjectDto>>> GetAllSubjects()
+        // ИСПРАВЛЕНО: Использование констант ролей из UserRoles
+        [Authorize(Roles = $"{Administrator},{Teacher},{Student}")]
+        public async Task<ActionResult<List<SubjectDto>>> GetAllSubjects(
+            [FromQuery] string? name, // ДОБАВЛЕНО: Параметр для фильтрации по имени
+            [FromQuery] string? code) // ДОБАВЛЕНО: Параметр для фильтрации по коду
         {
-            string? currentUserIdString = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if (string.IsNullOrEmpty(currentUserIdString)) return Unauthorized();
-            int currentUserId = int.Parse(currentUserIdString);
+            int currentUserId = GetCurrentUserId();
 
-            // Use _subjectService for subject-specific authorization and data fetching
-            bool authorized = await _subjectService.CanUserViewAllSubjectsAsync(currentUserId);
+            bool authorized = await _userService.CanUserViewAllSubjectsAsync(currentUserId);
             if (!authorized)
             {
-                return Forbid();
+                // ИСПРАВЛЕНО: Возвращаем StatusCode(403) с сообщением для согласованности
+                return StatusCode(403, new { message = "You are not authorized to view all subjects." });
             }
 
-            var subjects = await _subjectService.GetAllSubjectsAsync();
+            // ИСПРАВЛЕНО: Передаем параметры name и code в сервис
+            var subjects = await _subjectService.GetAllSubjectsAsync(name, code);
             return Ok(subjects);
         }
 
         [HttpGet("{subjectId}")]
-        [Authorize(Roles = "Администратор,Преподаватель,Студент")]
+        [Authorize(Roles = $"{Administrator},{Teacher},{Student}")]
         public async Task<ActionResult<SubjectDto>> GetSubjectById(int subjectId)
         {
-            string? currentUserIdString = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if (string.IsNullOrEmpty(currentUserIdString)) return Unauthorized();
-            int currentUserId = int.Parse(currentUserIdString);
+            int currentUserId = GetCurrentUserId();
 
-            bool authorized = await _subjectService.CanUserViewSubjectDetailsAsync(currentUserId, subjectId);
+            bool authorized = await _userService.CanUserViewSubjectDetailsAsync(currentUserId, subjectId);
             if (!authorized)
             {
-                return Forbid();
+                return StatusCode(403, new { message = "You are not authorized to view this subject's details." });
             }
 
             var subject = await _subjectService.GetSubjectByIdAsync(subjectId);
-            // After CanUserViewSubjectDetailsAsync confirms existence and authorization,
-            // if GetSubjectByIdAsync still returns null, it's an internal consistency issue.
-            // For general API behavior, returning NotFound if the subject is genuinely not found is more appropriate.
             if (subject == null)
             {
-                return NotFound(); // Or Forbid() if you want to be stricter about existence via auth
+                return NotFound($"Subject with ID {subjectId} not found."); // Уточненное сообщение
             }
 
             return Ok(subject);
         }
 
         [HttpPost]
-        [Authorize(Roles = "Администратор")]
+        [Authorize(Roles = Administrator)] // ИСПРАВЛЕНО: Использование константы роли
         public async Task<IActionResult> AddSubject([FromBody] AddSubjectRequest request)
         {
-            string? currentUserIdString = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if (string.IsNullOrEmpty(currentUserIdString)) return Unauthorized();
-            int currentUserId = int.Parse(currentUserIdString);
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
 
-            bool authorized = await _subjectService.CanUserAddSubjectAsync(currentUserId);
+            int currentUserId = GetCurrentUserId();
+
+            bool authorized = await _userService.CanUserAddSubjectAsync(currentUserId);
             if (!authorized)
             {
-                return Forbid();
+                return StatusCode(403, new { message = "You are not authorized to add subjects." });
             }
 
-            var addedSubjectDto = await _subjectService.AddSubjectAsync(request);
-
-            if (addedSubjectDto == null)
+            try
             {
-                // This could mean a duplicate name or other business rule violation
-                return BadRequest("Failed to add subject. The subject might already exist or the request data is invalid.");
+                // ИСПРАВЛЕНО: Сервис теперь выбрасывает исключение, а не возвращает null
+                var addedSubjectDto = await _subjectService.AddSubjectAsync(request);
+                return CreatedAtAction(nameof(GetSubjectById), new { subjectId = addedSubjectDto.SubjectId }, addedSubjectDto);
             }
-
-            return CreatedAtAction(nameof(GetSubjectById), new { subjectId = addedSubjectDto.SubjectId }, addedSubjectDto);
+            catch (ArgumentException ex) // ДОБАВЛЕНО: Обработка ArgumentException (например, для дубликатов)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
         }
 
         [HttpPut("{subjectId}")]
-        [Authorize(Roles = "Администратор")]
+        [Authorize(Roles = Administrator)] // ИСПРАВЛЕНО: Использование константы роли
         public async Task<IActionResult> UpdateSubject(int subjectId, [FromBody] UpdateSubjectRequest request)
         {
-            string? currentUserIdString = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if (string.IsNullOrEmpty(currentUserIdString)) return Unauthorized();
-            int currentUserId = int.Parse(currentUserIdString);
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
 
-            bool authorized = await _subjectService.CanUserUpdateSubjectAsync(currentUserId, subjectId);
+            int currentUserId = GetCurrentUserId();
+
+            bool authorized = await _userService.CanUserUpdateSubjectAsync(currentUserId, subjectId);
             if (!authorized)
             {
-                return Forbid();
+                return StatusCode(403, new { message = "You are not authorized to update this subject." });
             }
 
-            var isUpdated = await _subjectService.UpdateSubjectAsync(subjectId, request);
-
-            if (!isUpdated)
+            try
             {
-                // This typically means the subject was not found or a business rule prevented the update (e.g., duplicate name).
-                return NotFound();
+                var isUpdated = await _subjectService.UpdateSubjectAsync(subjectId, request);
+                if (!isUpdated)
+                {
+                    // ИСПРАВЛЕНО: Уточненное сообщение для NotFound
+                    return NotFound($"Subject with ID {subjectId} not found or no changes were made.");
+                }
+                return NoContent();
             }
-
-            return NoContent();
+            catch (ArgumentException ex) // ДОБАВЛЕНО: Обработка ArgumentException (например, для дубликатов)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
         }
 
         [HttpDelete("{subjectId}")]
-        [Authorize(Roles = "Администратор")]
+        [Authorize(Roles = Administrator)] // ИСПРАВЛЕНО: Использование константы роли
         public async Task<IActionResult> DeleteSubject(int subjectId)
         {
-            string? currentUserIdString = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if (string.IsNullOrEmpty(currentUserIdString)) return Unauthorized();
-            int currentUserId = int.Parse(currentUserIdString);
+            int currentUserId = GetCurrentUserId();
 
-            bool authorized = await _subjectService.CanUserDeleteSubjectAsync(currentUserId, subjectId);
+            bool authorized = await _userService.CanUserDeleteSubjectAsync(currentUserId, subjectId);
             if (!authorized)
             {
-                return Forbid();
+                return StatusCode(403, new { message = "You are not authorized to delete subjects." });
             }
 
-            var isDeleted = await _subjectService.DeleteSubjectAsync(subjectId);
-
-            if (!isDeleted)
+            try
             {
-                // This typically means the subject was not found.
-                return NotFound();
+                var isDeleted = await _subjectService.DeleteSubjectAsync(subjectId);
+                if (!isDeleted)
+                {
+                    return NotFound($"Subject with ID {subjectId} not found."); // Уточненное сообщение
+                }
+                return NoContent();
             }
-
-            return NoContent();
+            catch (InvalidOperationException ex) // ДОБАВЛЕНО: Обработка InvalidOperationException (для зависимостей)
+            {
+                return Conflict(new { message = ex.Message }); // 409 Conflict для проблем с зависимостями
+            }
         }
     }
 }

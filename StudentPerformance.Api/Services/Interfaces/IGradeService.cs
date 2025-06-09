@@ -2,7 +2,8 @@
 
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using StudentPerformance.Api.Models.DTOs; // If your DTOs are in Models/DTOs, use this instead or additionally
+using StudentPerformance.Api.Models.DTOs;
+using StudentPerformance.Api.Models.Requests; // If your DTOs are in Models/DTOs, use this instead or additionally
 
 namespace StudentPerformance.Api.Services
 {

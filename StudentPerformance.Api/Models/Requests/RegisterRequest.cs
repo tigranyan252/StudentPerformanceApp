@@ -1,8 +1,9 @@
-﻿// Path: StudentPerformance.Api/Models/DTOs/RegisterRequest.cs
+﻿// Path: StudentPerformance.Api/Models/DTOs/RegisterRequest.cs (Corrected Path)
 
-using System.ComponentModel.DataAnnotations; // For attributes like [Required], [EmailAddress], [MinLength]
+using System; // Добавлено для DateTime
+using System.ComponentModel.DataAnnotations;
 
-namespace StudentPerformance.Api.Models.DTOs
+namespace StudentPerformance.Api.Models.Requests
 {
     /// <summary>
     /// Data Transfer Object for user registration requests.
@@ -20,7 +21,7 @@ namespace StudentPerformance.Api.Models.DTOs
         public string Password { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "User type is required.")]
-        // Example: "Студент", "Преподаватель", "Администратор"
+        // Example: "Student", "Teacher", "Admin"
         public string UserType { get; set; } = string.Empty;
 
         [Required(ErrorMessage = "First name is required.")]
@@ -35,8 +36,18 @@ namespace StudentPerformance.Api.Models.DTOs
         [StringLength(150, ErrorMessage = "Email cannot exceed 150 characters.")]
         public string? Email { get; set; } // Email is optional in the database, but required for format if provided
 
-        // This is specifically for students to specify their group during registration.
-        // It's nullable because teachers/admins won't have a GroupId.
+        // Properties for Student profile (nullable)
+        // Эти поля будут заполняться только при регистрации пользователя с UserType="Student"
         public int? GroupId { get; set; }
+        public DateTime? DateOfBirth { get; set; }
+        public DateTime? EnrollmentDate { get; set; }
+
+        // Properties for Teacher profile (nullable)
+        // Эти поля будут заполняться только при регистрации пользователя с UserType="Teacher"
+        [StringLength(100, ErrorMessage = "Department cannot exceed 100 characters.")]
+        public string? Department { get; set; }
+
+        [StringLength(100, ErrorMessage = "Position cannot exceed 100 characters.")] // ИСПРАВЛЕНО: ErrorError -> ErrorMessage
+        public string? Position { get; set; }
     }
 }

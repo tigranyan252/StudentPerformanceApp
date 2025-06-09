@@ -1,34 +1,40 @@
-﻿// Path: Controllers/SemestersController.cs
+﻿// Path: StudentPerformance.Api/Controllers/SemestersController.cs
 
 using Microsoft.AspNetCore.Mvc;
-using StudentPerformance.Api.Services; // Now for ISemesterService and IUserService
-using StudentPerformance.Api.Models.DTOs; // For SemesterDto, AddSemesterRequest, UpdateSemesterRequest
+using StudentPerformance.Api.Models.DTOs;
 using Microsoft.AspNetCore.Authorization;
-using System.Security.Claims; // Crucial for current user's ID
+using System.Security.Claims;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http; // For StatusCodes
-using System; // For InvalidOperationException
+using System;
+using StudentPerformance.Api.Models.Requests;
+using StudentPerformance.Api.Services.Interfaces; // Для интерфейсов ISemesterService, IUserService
+using static StudentPerformance.Api.Utilities.UserRoles; // Для констант ролей
+using StudentPerformance.Api.Exceptions; // Для NotFoundException и ConflictException
+using Microsoft.Extensions.Logging; // Для логирования
 
 namespace StudentPerformance.Api.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
-    [Authorize] // All actions in this controller require authentication by default
+    [Authorize] // Все действия в этом контроллере требуют аутентификации по умолчанию
     public class SemestersController : ControllerBase
     {
-        // Inject dedicated services
+        // Инжектируем специализированные сервисы
         private readonly ISemesterService _semesterService;
-        private readonly IUserService _userService; // Still needed for authorization checks
+        private readonly IUserService _userService; // Все еще нужен для получения UserType, если он не из клейма
+        private readonly ILogger<SemestersController> _logger;
 
-        // Controller Constructor
-        public SemestersController(ISemesterService semesterService, IUserService userService)
+        // Конструктор контроллера
+        public SemestersController(ISemesterService semesterService, IUserService userService, ILogger<SemestersController> logger)
         {
             _semesterService = semesterService;
             _userService = userService;
+            _logger = logger;
         }
 
-        // Helper to get the current user ID from claims
+        // Вспомогательный метод для получения ID текущего пользователя из claims
         private int GetCurrentUserId()
         {
             var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
@@ -36,172 +42,271 @@ namespace StudentPerformance.Api.Controllers
             {
                 return userId;
             }
-            throw new InvalidOperationException("User ID claim not found or invalid in token.");
+            _logger.LogWarning("GetCurrentUserId: User ID claim not found or invalid in token.");
+            throw new UnauthorizedAccessException("User ID claim not found or invalid in token.");
         }
 
         /// <summary>
-        /// Gets a list of all semesters.
+        /// Gets a list of all semesters with optional filtering by name, code, start date, and end date.
         /// Requires Administrator, Teacher, or Student roles, and fine-grained permission.
         /// </summary>
+        /// <param name="name">Optional: Filter semesters by name.</param>
+        /// <param name="code">Optional: Filter semesters by code.</param>
+        /// <param name="startDateFrom">Optional: Filter semesters starting from this date.</param>
+        /// <param name="endDateTo">Optional: Filter semesters ending by this date.</param>
         /// <returns>A list of Semester DTOs.</returns>
         [HttpGet]
-        [Authorize(Roles = "Администратор,Преподаватель,Студент")]
+        [Authorize(Roles = $"{Administrator},{Teacher},{Student}")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        public async Task<ActionResult<IEnumerable<SemesterDto>>> GetAllSemesters()
+        // ИЗМЕНЕНО: Добавлены все параметры фильтрации
+        public async Task<ActionResult<IEnumerable<SemesterDto>>> GetAllSemesters(
+            [FromQuery] string? name = null,
+            [FromQuery] string? code = null,
+            [FromQuery] DateTime? startDateFrom = null,
+            [FromQuery] DateTime? endDateTo = null)
         {
-            var currentUserId = GetCurrentUserId();
-
-            bool authorized = await _userService.CanUserViewAllSemestersAsync(currentUserId);
-            if (!authorized)
+            try
             {
-                return Forbid();
-            }
+                var currentUserId = GetCurrentUserId();
 
-            var semesters = await _semesterService.GetAllSemestersAsync(); // Call dedicated semester service
-            return Ok(semesters);
+                // Использование ISemesterService для проверки авторизации
+                bool authorized = await _semesterService.CanUserViewAllSemestersAsync(currentUserId);
+                if (!authorized)
+                {
+                    _logger.LogWarning("GetAllSemesters: User {UserId} is not authorized to view all semesters.", currentUserId);
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "У вас нет прав для просмотра всех семестров." });
+                }
+
+                // ИЗМЕНЕНО: Передача всех параметров в сервисный слой
+                var semesters = await _semesterService.GetAllSemestersAsync(name, code, startDateFrom, endDateTo);
+                return Ok(semesters);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, "Unauthorized access attempt to GetAllSemesters.");
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while fetching all semesters.");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Произошла ошибка при получении списка семестров." });
+            }
         }
 
-        /// <summary>
-        /// Gets a specific semester by its ID.
-        /// Requires Administrator, Teacher, or Student roles, and fine-grained permission.
-        /// </summary>
-        /// <param name="semesterId">The ID of the semester.</param>
-        /// <returns>The Semester DTO or NotFound if the semester does not exist.</returns>
         [HttpGet("{semesterId}")]
-        [Authorize(Roles = "Администратор,Преподаватель,Студент")]
+        [Authorize(Roles = $"{Administrator},{Teacher},{Student}")]
         [ProducesResponseType(StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status404NotFound)] // Added 404
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public async Task<ActionResult<SemesterDto>> GetSemesterById(int semesterId)
         {
-            var currentUserId = GetCurrentUserId();
-
-            bool authorized = await _userService.CanUserViewSemesterDetailsAsync(currentUserId, semesterId);
-            if (!authorized)
+            try
             {
-                // If authorization denies access, it could be because the semester doesn't exist
-                // or the user simply isn't allowed to see it. For security, Forbid is appropriate.
-                return Forbid();
+                var currentUserId = GetCurrentUserId();
+
+                // Использование ISemesterService для проверки авторизации
+                bool authorized = await _semesterService.CanUserViewSemesterDetailsAsync(currentUserId, semesterId);
+                if (!authorized)
+                {
+                    _logger.LogWarning("GetSemesterById: User {UserId} is not authorized to view semester {SemesterId}.", currentUserId, semesterId);
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "У вас нет прав для просмотра деталей этого семестра." });
+                }
+
+                var semester = await _semesterService.GetSemesterByIdAsync(semesterId);
+
+                if (semester == null)
+                {
+                    return NotFound($"Семестр с ID {semesterId} не найден.");
+                }
+
+                return Ok(semester);
             }
-
-            var semester = await _semesterService.GetSemesterByIdAsync(semesterId); // Call dedicated semester service
-
-            if (semester == null)
+            catch (UnauthorizedAccessException ex)
             {
-                // This case should ideally be handled by CanUserViewSemesterDetailsAsync,
-                // but as a fallback, explicitly return NotFound if the service indicates absence.
-                return NotFound();
+                _logger.LogError(ex, "Unauthorized access attempt to GetSemesterById for semester {SemesterId}.", semesterId);
+                return Unauthorized(new { message = ex.Message });
             }
-
-            return Ok(semester);
+            catch (NotFoundException ex)
+            {
+                _logger.LogWarning(ex, "GetSemesterById: {Message}", ex.Message);
+                return NotFound(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while fetching semester {SemesterId} by ID.", semesterId);
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = $"Произошла ошибка при получении семестра с ID {semesterId}." });
+            }
         }
 
-        /// <summary>
-        /// Adds a new semester.
-        /// Requires Administrator role and fine-grained permission.
-        /// </summary>
-        /// <param name="request">The data for the new semester.</param>
-        /// <returns>A DTO of the newly created semester or BadRequest if invalid.</returns>
         [HttpPost]
-        [Authorize(Roles = "Администратор")]
+        [Authorize(Roles = Administrator)]
         [ProducesResponseType(StatusCodes.Status201Created)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)]
         public async Task<IActionResult> AddSemester([FromBody] AddSemesterRequest request)
         {
-            var currentUserId = GetCurrentUserId();
-
-            bool authorized = await _userService.CanUserAddSemesterAsync(currentUserId);
-            if (!authorized)
+            if (!ModelState.IsValid)
             {
-                return Forbid();
+                return BadRequest(ModelState);
             }
 
-            var addedSemesterDto = await _semesterService.AddSemesterAsync(request); // Call dedicated semester service
-
-            if (addedSemesterDto == null)
+            try
             {
-                return BadRequest("Failed to add semester. It might already exist or invalid data provided (e.g., date overlap).");
-            }
+                var currentUserId = GetCurrentUserId();
 
-            return CreatedAtAction(nameof(GetSemesterById), new { semesterId = addedSemesterDto.SemesterId }, addedSemesterDto);
+                // Использование ISemesterService для проверки авторизации
+                bool authorized = await _semesterService.CanUserManageSemestersAsync(currentUserId);
+                if (!authorized)
+                {
+                    _logger.LogWarning("AddSemester: User {UserId} is not authorized to add semesters.", currentUserId);
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "У вас нет прав для добавления семестров." });
+                }
+
+                var addedSemesterDto = await _semesterService.AddSemesterAsync(request);
+
+                if (addedSemesterDto == null)
+                {
+                    return BadRequest("Failed to add semester due to an unexpected reason.");
+                }
+
+                return CreatedAtAction(nameof(GetSemesterById), new { semesterId = addedSemesterDto.SemesterId }, addedSemesterDto);
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning(ex, "AddSemester: Invalid argument provided: {Message}", ex.Message);
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (ConflictException ex)
+            {
+                _logger.LogWarning(ex, "AddSemester: Conflict detected: {Message}", ex.Message);
+                return Conflict(new { message = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, "Unauthorized access attempt to AddSemester.");
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while adding a semester.");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Произошла ошибка при добавлении семестра." });
+            }
         }
 
-        /// <summary>
-        /// Updates an existing semester.
-        /// Requires Administrator role and fine-grained permission.
-        /// </summary>
-        /// <param name="semesterId">The ID of the semester to update.</param>
-        /// <param name="request">The updated data for the semester.</param>
-        /// <returns>NoContent if successful, NotFound if the semester doesn't exist, or BadRequest for invalid data.</returns>
         [HttpPut("{semesterId}")]
-        [Authorize(Roles = "Администратор")]
+        [Authorize(Roles = Administrator)]
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)]
         public async Task<IActionResult> UpdateSemester(int semesterId, [FromBody] UpdateSemesterRequest request)
         {
-            var currentUserId = GetCurrentUserId();
-
-            bool authorized = await _userService.CanUserUpdateSemesterAsync(currentUserId, semesterId);
-            if (!authorized)
+            if (!ModelState.IsValid)
             {
-                return Forbid();
+                return BadRequest(ModelState);
             }
 
-            var isUpdated = await _semesterService.UpdateSemesterAsync(semesterId, request); // Call dedicated semester service
-
-            if (!isUpdated)
+            try
             {
-                // If update failed, check if it was because the semester wasn't found
-                var existingSemester = await _semesterService.GetSemesterByIdAsync(semesterId);
-                if (existingSemester == null)
+                var currentUserId = GetCurrentUserId();
+
+                // Использование ISemesterService для проверки авторизации
+                bool authorized = await _semesterService.CanUserManageSemestersAsync(currentUserId);
+                if (!authorized)
                 {
-                    return NotFound($"Semester with ID {semesterId} not found.");
+                    _logger.LogWarning("UpdateSemester: User {UserId} is not authorized to update semester {SemesterId}.", currentUserId, semesterId);
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "У вас нет прав для обновления семестров." });
                 }
-                // Otherwise, it's a business logic error (e.g., date overlap, duplicate name)
-                return BadRequest("Failed to update semester. Check for data conflicts.");
-            }
 
-            return NoContent();
+                var isUpdated = await _semesterService.UpdateSemesterAsync(semesterId, request);
+
+                if (!isUpdated)
+                {
+                    // Это маловероятно, так как UpdateSemesterAsync должен выбрасывать исключения при Not Found
+                    var existingSemester = await _semesterService.GetSemesterByIdAsync(semesterId);
+                    if (existingSemester == null)
+                    {
+                        return NotFound($"Семестр с ID {semesterId} не найден.");
+                    }
+                    return BadRequest("Failed to update semester. Check for data conflicts.");
+                }
+
+                return NoContent();
+            }
+            catch (NotFoundException ex)
+            {
+                _logger.LogWarning(ex, "UpdateSemester: {Message}", ex.Message);
+                return NotFound(new { message = ex.Message });
+            }
+            catch (ConflictException ex)
+            {
+                _logger.LogWarning(ex, "UpdateSemester: Conflict detected: {Message}", ex.Message);
+                return Conflict(new { message = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, "Unauthorized access attempt to UpdateSemester for semester {SemesterId}.", semesterId);
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while updating semester with ID: {SemesterId}", semesterId);
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = $"Произошла ошибка при обновлении семестра с ID {semesterId}." });
+            }
         }
 
-        /// <summary>
-        /// Deletes a semester.
-        /// Requires Administrator role and fine-grained permission.
-        /// </summary>
-        /// <param name="semesterId">The ID of the semester to delete.</param>
-        /// <returns>NoContent if successful, NotFound if the semester does not exist.</returns>
         [HttpDelete("{semesterId}")]
-        [Authorize(Roles = "Администратор")]
+        [Authorize(Roles = Administrator)]
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)]
         public async Task<IActionResult> DeleteSemester(int semesterId)
         {
-            var currentUserId = GetCurrentUserId();
-
-            bool authorized = await _userService.CanUserDeleteSemesterAsync(currentUserId, semesterId);
-            if (!authorized)
+            try
             {
-                return Forbid();
+                var currentUserId = GetCurrentUserId();
+
+                // Использование ISemesterService для проверки авторизации
+                bool authorized = await _semesterService.CanUserManageSemestersAsync(currentUserId);
+                if (!authorized)
+                {
+                    _logger.LogWarning("DeleteSemester: User {UserId} is not authorized to delete semester {SemesterId}.", currentUserId, semesterId);
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "У вас нет прав для удаления семестров." });
+                }
+
+                await _semesterService.DeleteSemesterAsync(semesterId);
+                _logger.LogInformation($"DeleteSemester: Semester {semesterId} deleted successfully via controller.");
+                return NoContent();
             }
-
-            var isDeleted = await _semesterService.DeleteSemesterAsync(semesterId); // Call dedicated semester service
-
-            if (!isDeleted)
+            catch (NotFoundException ex)
             {
-                return NotFound($"Semester with ID {semesterId} not found.");
+                _logger.LogWarning(ex, "DeleteSemester: {Message}", ex.Message);
+                return NotFound(new { message = ex.Message });
             }
-
-            return NoContent();
+            catch (ConflictException ex)
+            {
+                _logger.LogWarning(ex, "DeleteSemester: {Message}", ex.Message);
+                return Conflict(new { message = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, "Unauthorized access attempt to DeleteSemester for semester {SemesterId}.", semesterId);
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An unexpected error occurred while deleting semester with ID: {SemesterId}", semesterId);
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = $"Произошла неожиданная ошибка при удалении семестра с ID {semesterId}." });
+            }
         }
     }
 }

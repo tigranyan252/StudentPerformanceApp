@@ -3,14 +3,17 @@
 using AutoMapper;
 using Microsoft.EntityFrameworkCore;
 using StudentPerformance.Api.Data;
+using StudentPerformance.Api.Data.Entities;
 using StudentPerformance.Api.Models.DTOs;
-using StudentPerformance.Api.Data.Entities; // Assuming your Group entity is here
+using StudentPerformance.Api.Models.Requests;
+using StudentPerformance.Api.Services.Interfaces; // ИСПРАВЛЕНО: Правильный namespace для интерфейса
+using StudentPerformance.Api.Utilities; // ДОБАВЛЕНО: Для доступа к константам ролей
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using System;
 
-namespace StudentPerformance.Api.Services
+namespace StudentPerformance.Api.Services // ИСПРАВЛЕНО: Namespace остается Services для реализации
 {
     public class GroupService : IGroupService
     {
@@ -23,10 +26,23 @@ namespace StudentPerformance.Api.Services
             _mapper = mapper;
         }
 
-        public async Task<IEnumerable<GroupDto>> GetAllGroupsAsync()
+        // ИСПРАВЛЕНО: Добавлены параметры для фильтрации и возвращаемый тип List<GroupDto>
+        public async Task<List<GroupDto>> GetAllGroupsAsync(string? name, string? code)
         {
-            var groups = await _context.Groups.ToListAsync();
-            return _mapper.Map<IEnumerable<GroupDto>>(groups);
+            var query = _context.Groups.AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                query = query.Where(g => g.Name.Contains(name));
+            }
+
+            if (!string.IsNullOrWhiteSpace(code))
+            {
+                query = query.Where(g => g.Code.Contains(code));
+            }
+
+            var groups = await query.ToListAsync();
+            return _mapper.Map<List<GroupDto>>(groups);
         }
 
         public async Task<GroupDto?> GetGroupByIdAsync(int groupId)
@@ -35,42 +51,62 @@ namespace StudentPerformance.Api.Services
             return _mapper.Map<GroupDto>(group);
         }
 
-        public async Task<GroupDto?> AddGroupAsync(AddGroupRequest request)
+        public async Task<GroupDto> AddGroupAsync(AddGroupRequest request)
         {
-            // Example: Check for duplicate group name before adding
-            var existingGroup = await _context.Groups.FirstOrDefaultAsync(g => g.Name == request.Name);
-            if (existingGroup != null)
+            // Check if a group with the same name or code already exists
+            if (await _context.Groups.AnyAsync(g => g.Name == request.Name))
             {
-                return null; // Or throw a specific exception for duplicate name
+                throw new ArgumentException("A group with the same name already exists.");
+            }
+            if (await _context.Groups.AnyAsync(g => g.Code == request.Code))
+            {
+                throw new ArgumentException("A group with the same code already exists.");
             }
 
-            var group = _mapper.Map<Group>(request);
-            _context.Groups.Add(group);
+            var newGroup = _mapper.Map<Group>(request);
+            newGroup.CreatedAt = DateTime.UtcNow;
+            newGroup.UpdatedAt = DateTime.UtcNow;
+
+            _context.Groups.Add(newGroup);
             await _context.SaveChangesAsync();
-            return _mapper.Map<GroupDto>(group);
+
+            return _mapper.Map<GroupDto>(newGroup);
         }
 
         public async Task<bool> UpdateGroupAsync(int groupId, UpdateGroupRequest request)
         {
-            var group = await _context.Groups.FindAsync(groupId);
-            if (group == null)
+            var groupToUpdate = await _context.Groups.FindAsync(groupId);
+            if (groupToUpdate == null)
             {
-                return false; // Group not found
+                return false;
             }
 
-            // Example: Check for duplicate name if the name is being changed
-            if (group.Name != request.Name)
+            // Check for duplicate name or code if they are being updated
+            if (!string.IsNullOrWhiteSpace(request.Name) && request.Name != groupToUpdate.Name)
             {
-                var duplicateGroup = await _context.Groups.AnyAsync(g => g.Name == request.Name && g.GroupId != groupId);
-                if (duplicateGroup)
+                if (await _context.Groups.AnyAsync(g => g.Name == request.Name && g.GroupId != groupId))
                 {
-                    // This scenario should probably be handled by the controller returning BadRequest
-                    // Or you could throw a custom exception here. For now, returning false.
-                    return false;
+                    throw new ArgumentException("Another group with the same name already exists.");
                 }
+                groupToUpdate.Name = request.Name;
             }
 
-            _mapper.Map(request, group); // Update entity properties from DTO
+            if (!string.IsNullOrWhiteSpace(request.Code) && request.Code != groupToUpdate.Code)
+            {
+                if (await _context.Groups.AnyAsync(g => g.Code == request.Code && g.GroupId != groupId))
+                {
+                    throw new ArgumentException("Another group with the same code already exists.");
+                }
+                groupToUpdate.Code = request.Code;
+            }
+
+            // Update description if provided
+            if (request.Description != null) // Allow setting to null or empty string
+            {
+                groupToUpdate.Description = request.Description;
+            }
+
+            groupToUpdate.UpdatedAt = DateTime.UtcNow;
 
             try
             {
@@ -79,34 +115,108 @@ namespace StudentPerformance.Api.Services
             }
             catch (DbUpdateConcurrencyException)
             {
-                if (!await _context.Groups.AnyAsync(e => e.GroupId == groupId))
+                if (!_context.Groups.Any(e => e.GroupId == groupId))
                 {
-                    return false; // Concurrency conflict: group was deleted by another process
+                    return false; // Not found (deleted by another user or didn't exist initially)
                 }
-                throw; // Re-throw other concurrency exceptions
+                throw; // Re-throw if it's a genuine concurrency issue
             }
             catch (Exception)
             {
-                // Log exception
-                return false; // General error during update
+                // Log the exception here
+                return false; // Failed for other reasons
             }
         }
 
         public async Task<bool> DeleteGroupAsync(int groupId)
         {
-            var group = await _context.Groups.FindAsync(groupId);
-            if (group == null)
+            var groupToDelete = await _context.Groups
+                .Include(g => g.Students) // Include students to check for dependencies
+                .Include(g => g.TeacherSubjectGroupAssignments) // Include assignments to check for dependencies
+                .FirstOrDefaultAsync(g => g.GroupId == groupId);
+
+            if (groupToDelete == null) return false;
+
+            // Check for dependencies:
+            // 1. Students associated with this group
+            if (groupToDelete.Students.Any())
             {
-                return false; // Group not found
+                throw new InvalidOperationException("Cannot delete group: There are students associated with this group.");
             }
 
-            // Optional: Check for related entities (e.g., students in the group)
-            // if you want to prevent deletion if there are dependencies.
-            // if (await _context.Students.AnyAsync(s => s.GroupId == groupId)) { return false; } // Example
+            // 2. TeacherSubjectGroupAssignments associated with this group
+            if (groupToDelete.TeacherSubjectGroupAssignments.Any())
+            {
+                throw new InvalidOperationException("Cannot delete group: There are teacher-subject-group assignments associated with this group.");
+            }
 
-            _context.Groups.Remove(group);
+            _context.Groups.Remove(groupToDelete);
             await _context.SaveChangesAsync();
             return true;
+        }
+
+        // --- Authorization/Permission Checks for Groups (ДОБАВЛЕНО) ---
+
+        public async Task<bool> CanUserViewAllGroupsAsync(int userId)
+        {
+            var user = await _context.Users.Include(u => u.Role).FirstOrDefaultAsync(u => u.Id == userId);
+            if (user == null) return false;
+            return user.Role?.Name == UserRoles.Administrator || user.Role?.Name == UserRoles.Teacher || user.Role?.Name == UserRoles.Student;
+        }
+
+        public async Task<bool> CanUserViewGroupDetailsAsync(int userId, int groupId)
+        {
+            var currentUser = await _context.Users.Include(u => u.Role).FirstOrDefaultAsync(u => u.Id == userId);
+            if (currentUser == null) return false;
+
+            // Admins can view any group
+            if (currentUser.Role?.Name == UserRoles.Administrator)
+            {
+                return true;
+            }
+
+            // Teachers can view any group
+            if (currentUser.Role?.Name == UserRoles.Teacher)
+            {
+                return true;
+            }
+
+            // Students can view their own group details
+            if (currentUser.Role?.Name == UserRoles.Student)
+            {
+                var student = await _context.Students.AsNoTracking().FirstOrDefaultAsync(s => s.UserId == userId);
+                if (student != null && student.GroupId == groupId)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public async Task<bool> CanUserAddGroupAsync(int userId)
+        {
+            var user = await _context.Users.Include(u => u.Role).FirstOrDefaultAsync(u => u.Id == userId);
+            if (user == null) return false;
+            return user.Role?.Name == UserRoles.Administrator;
+        }
+
+        public async Task<bool> CanUserUpdateGroupAsync(int userId, int groupId)
+        {
+            var currentUser = await _context.Users.Include(u => u.Role).FirstOrDefaultAsync(u => u.Id == userId);
+            if (currentUser == null) return false;
+
+            // Only administrators can update groups
+            return currentUser.Role?.Name == UserRoles.Administrator;
+        }
+
+        public async Task<bool> CanUserDeleteGroupAsync(int userId, int groupId)
+        {
+            var currentUser = await _context.Users.Include(u => u.Role).FirstOrDefaultAsync(u => u.Id == userId);
+            if (currentUser == null) return false;
+
+            // Only administrators can delete groups
+            return currentUser.Role?.Name == UserRoles.Administrator;
         }
     }
 }

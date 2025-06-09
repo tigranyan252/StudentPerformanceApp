@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace StudentPerformance.Api.Migrations
 {
     /// <inheritdoc />
-    public partial class InitialCreate : Migration
+    public partial class InitialFullSchema : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -18,7 +18,8 @@ namespace StudentPerformance.Api.Migrations
                     GroupId = table.Column<int>(type: "int", nullable: false)
                         .Annotation("SqlServer:Identity", "1, 1"),
                     Name = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: false),
-                    YearOfStudy = table.Column<int>(type: "int", nullable: true),
+                    Code = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
+                    Description = table.Column<string>(type: "nvarchar(500)", maxLength: 500, nullable: true),
                     CreatedAt = table.Column<DateTime>(type: "datetime2", nullable: false),
                     UpdatedAt = table.Column<DateTime>(type: "datetime2", nullable: true)
                 },
@@ -210,7 +211,7 @@ namespace StudentPerformance.Api.Migrations
                     Description = table.Column<string>(type: "nvarchar(1000)", maxLength: 1000, nullable: true),
                     Type = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: true),
                     MaxScore = table.Column<decimal>(type: "decimal(5,2)", nullable: false),
-                    DueDate = table.Column<DateTime>(type: "datetime2", nullable: true),
+                    DueDate = table.Column<DateTime>(type: "datetime2", nullable: false),
                     SubmissionDate = table.Column<DateTime>(type: "datetime2", nullable: true),
                     CreatedAt = table.Column<DateTime>(type: "datetime2", nullable: false),
                     UpdatedAt = table.Column<DateTime>(type: "datetime2", nullable: true)
@@ -247,8 +248,7 @@ namespace StudentPerformance.Api.Migrations
                         name: "FK_Attendances_Students_StudentId",
                         column: x => x.StudentId,
                         principalTable: "Students",
-                        principalColumn: "StudentId",
-                        onDelete: ReferentialAction.Cascade);
+                        principalColumn: "StudentId");
                     table.ForeignKey(
                         name: "FK_Attendances_TeacherSubjectGroupAssignments_TeacherSubjectGroupAssignmentId",
                         column: x => x.TeacherSubjectGroupAssignmentId,
@@ -290,25 +290,24 @@ namespace StudentPerformance.Api.Migrations
                         column: x => x.SemesterId,
                         principalTable: "Semesters",
                         principalColumn: "SemesterId",
-                        onDelete: ReferentialAction.Restrict);
+                        onDelete: ReferentialAction.SetNull);
                     table.ForeignKey(
                         name: "FK_Grades_Students_StudentId",
                         column: x => x.StudentId,
                         principalTable: "Students",
-                        principalColumn: "StudentId",
-                        onDelete: ReferentialAction.Restrict);
+                        principalColumn: "StudentId");
                     table.ForeignKey(
                         name: "FK_Grades_Subjects_SubjectId",
                         column: x => x.SubjectId,
                         principalTable: "Subjects",
                         principalColumn: "SubjectId",
-                        onDelete: ReferentialAction.Restrict);
+                        onDelete: ReferentialAction.SetNull);
                     table.ForeignKey(
                         name: "FK_Grades_TeacherSubjectGroupAssignments_TeacherSubjectGroupAssignmentId",
                         column: x => x.TeacherSubjectGroupAssignmentId,
                         principalTable: "TeacherSubjectGroupAssignments",
                         principalColumn: "TeacherSubjectGroupAssignmentId",
-                        onDelete: ReferentialAction.Cascade);
+                        onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
                         name: "FK_Grades_Teachers_TeacherId",
                         column: x => x.TeacherId,
@@ -323,9 +322,10 @@ namespace StudentPerformance.Api.Migrations
                 column: "TeacherSubjectGroupAssignmentId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_Attendances_StudentId",
+                name: "IX_Attendances_StudentId_TeacherSubjectGroupAssignmentId_Date",
                 table: "Attendances",
-                column: "StudentId");
+                columns: new[] { "StudentId", "TeacherSubjectGroupAssignmentId", "Date" },
+                unique: true);
 
             migrationBuilder.CreateIndex(
                 name: "IX_Attendances_TeacherSubjectGroupAssignmentId",
@@ -343,9 +343,11 @@ namespace StudentPerformance.Api.Migrations
                 column: "SemesterId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_Grades_StudentId",
+                name: "IX_Grades_StudentId_AssignmentId",
                 table: "Grades",
-                column: "StudentId");
+                columns: new[] { "StudentId", "AssignmentId" },
+                unique: true,
+                filter: "[AssignmentId] IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Grades_SubjectId",
@@ -363,6 +365,24 @@ namespace StudentPerformance.Api.Migrations
                 column: "TeacherSubjectGroupAssignmentId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_Groups_Name",
+                table: "Groups",
+                column: "Name",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Roles_Name",
+                table: "Roles",
+                column: "Name",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Semesters_Name",
+                table: "Semesters",
+                column: "Name",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
                 name: "IX_Students_GroupId",
                 table: "Students",
                 column: "GroupId");
@@ -371,6 +391,12 @@ namespace StudentPerformance.Api.Migrations
                 name: "IX_Students_UserId",
                 table: "Students",
                 column: "UserId",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Subjects_Name",
+                table: "Subjects",
+                column: "Name",
                 unique: true);
 
             migrationBuilder.CreateIndex(
@@ -395,14 +421,22 @@ namespace StudentPerformance.Api.Migrations
                 column: "SubjectId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_TeacherSubjectGroupAssignments_TeacherId",
+                name: "IX_TeacherSubjectGroupAssignments_TeacherId_SubjectId_GroupId_SemesterId",
                 table: "TeacherSubjectGroupAssignments",
-                column: "TeacherId");
+                columns: new[] { "TeacherId", "SubjectId", "GroupId", "SemesterId" },
+                unique: true,
+                filter: "[GroupId] IS NOT NULL");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Users_RoleId",
                 table: "Users",
                 column: "RoleId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Users_Username",
+                table: "Users",
+                column: "Username",
+                unique: true);
         }
 
         /// <inheritdoc />

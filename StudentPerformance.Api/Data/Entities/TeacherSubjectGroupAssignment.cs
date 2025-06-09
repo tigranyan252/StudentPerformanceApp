@@ -38,8 +38,7 @@ namespace StudentPerformance.Api.Data.Entities
         public ICollection<Assignment> Assignments { get; set; } = new List<Assignment>();
         public ICollection<Attendance> Attendances { get; set; } = new List<Attendance>();
 
-        // !!! ДОБАВЬТЕ ЭТУ СТРОКУ !!!
-        public ICollection<Grade> Grades { get; set; } = new List<Grade>(); // Позволяет получить все оценки, выставленные в рамках этого назначения
-
+        // ДОБАВЛЕНО: Позволяет получить все оценки, выставленные в рамках этого назначения
+        public ICollection<Grade> Grades { get; set; } = new List<Grade>();
     }
 }

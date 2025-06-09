@@ -1,12 +1,17 @@
-﻿// Path: Controllers/MetadataController.cs
+﻿// Path: StudentPerformance.Api/Controllers/MetadataController.cs
 
 using Microsoft.AspNetCore.Mvc;
-using StudentPerformance.Api.Services; // <--- This line is crucial for finding ISemesterService etc.
 using StudentPerformance.Api.Models.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
+using StudentPerformance.Api.Services.Interfaces; // Убедитесь, что этот namespace импортирован
+using static StudentPerformance.Api.Utilities.UserRoles;
+
+// Обычно, если UserRoles находится в StudentPerformance.Api.Utilities,
+// то отдельный using StudentPerformance.Api.Services не нужен только для констант.
+// using StudentPerformance.Api.Services; // Для доступа к константам ролей - можно убрать, если есть static using
 
 namespace StudentPerformance.Api.Controllers
 {
@@ -19,19 +24,22 @@ namespace StudentPerformance.Api.Controllers
         private readonly IGroupService _groupService;
         private readonly ISubjectService _subjectService;
         private readonly ISemesterService _semesterService;
-        private readonly IAssignmentService _assignmentService; // For assignments data
+        private readonly ITeacherSubjectGroupAssignmentService _assignmentService; // For assignments data
+        // private readonly IUserService _userService; // Если понадобится для авторизации в этом контроллере
 
         // Constructor for dependency injection
         public MetadataController(
             IGroupService groupService,
             ISubjectService subjectService,
             ISemesterService semesterService,
-            IAssignmentService assignmentService) // Add assignmentService
+            ITeacherSubjectGroupAssignmentService assignmentService
+            /*, IUserService userService */) // Add assignmentService
         {
             _groupService = groupService;
             _subjectService = subjectService;
             _semesterService = semesterService;
             _assignmentService = assignmentService;
+            // _userService = userService;
         }
 
         // --- Actions for retrieving lookup information (return DTOs) ---
@@ -45,7 +53,8 @@ namespace StudentPerformance.Api.Controllers
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<ActionResult<IEnumerable<GroupDto>>> GetAllGroups()
         {
-            var groupDtos = await _groupService.GetAllGroupsAsync(); // Call dedicated service
+            // ИСПРАВЛЕНО: Передача null для name и code, чтобы получить все группы
+            var groupDtos = await _groupService.GetAllGroupsAsync(null, null);
             return Ok(groupDtos);
         }
 
@@ -58,7 +67,8 @@ namespace StudentPerformance.Api.Controllers
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<ActionResult<IEnumerable<SubjectDto>>> GetAllSubjects()
         {
-            var subjectDtos = await _subjectService.GetAllSubjectsAsync(); // Call dedicated service
+            // ИСПРАВЛЕНО: Вызов GetAllSubjectsAsync с параметрами null, null
+            var subjectDtos = await _subjectService.GetAllSubjectsAsync(null, null); // Call dedicated service
             return Ok(subjectDtos);
         }
 
@@ -71,7 +81,8 @@ namespace StudentPerformance.Api.Controllers
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<ActionResult<IEnumerable<SemesterDto>>> GetAllSemesters()
         {
-            var semesterDtos = await _semesterService.GetAllSemestersAsync(); // Call dedicated service
+            // ИСПРАВЛЕНО: Вызов GetAllSemestersAsync с параметром null для 'name'
+            var semesterDtos = await _semesterService.GetAllSemestersAsync(null); // Call dedicated service
             return Ok(semesterDtos);
         }
 
@@ -81,12 +92,13 @@ namespace StudentPerformance.Api.Controllers
         /// </summary>
         /// <returns>A list of Assignment DTOs.</returns>
         [HttpGet("assignments")]
-        [Authorize(Roles = "Администратор")] // Only administrator can see ALL assignments
+        [Authorize(Roles = Administrator)] // ИСПРАВЛЕНО: Используем константу Administrator
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public async Task<ActionResult<IEnumerable<TeacherSubjectGroupAssignmentDto>>> GetAllAssignments()
         {
+            // ИСПРАВЛЕНО: Вызов GetAllAssignmentsAsync без параметров (предполагая, что он не требует фильтров)
             var assignmentDtos = await _assignmentService.GetAllAssignmentsAsync(); // Call dedicated service
             return Ok(assignmentDtos);
         }

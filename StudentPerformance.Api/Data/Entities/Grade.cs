@@ -59,18 +59,24 @@ namespace StudentPerformance.Api.Data.Entities
         // Значение оценки, может быть NULL в БД (например, для "не сдано")
         // Decimal(5, 2) в БД мапится на decimal в C#
         [Column(TypeName = "decimal(5, 2)")] // Явно указываем тип для точности маппинга
-        public decimal? Value { get; set; } // Соответствует DECIMAL(5,2) NULLABLE
+        public decimal Value { get; set; } // ИСПРАВЛЕНО: Сделано не nullable, как в AddGradeRequest
 
         // Тип контроля (Экзамен, Зачет и т.д.), может быть NULL, с ограничением длины
-        [MaxLength(50)] // Соответствует nvarchar(50)
-        public string? ControlType { get; set; } // Тип контроля (опционально)
+        [Required] // ИСПРАВЛЕНО: Сделано обязательным, как в AddGradeRequest
+        [StringLength(50)] // Соответствует nvarchar(50)
+        public string ControlType { get; set; } = string.Empty; // Тип контроля
 
         // Дата получения оценки, может быть NULL, используем DateTime?
-        public DateTime? DateReceived { get; set; } // Соответствует DATE NULLABLE
+        [Required] // ИСПРАВЛЕНО: Сделано обязательным, как в AddGradeRequest
+        public DateTime DateReceived { get; set; } // Соответствует DATE
 
         // Состояние оценки (Черновик, Выставлена и т.д.), может быть NULL, с ограничением длины
-        [MaxLength(50)] // Соответствует nvarchar(50)
-        public string? Status { get; set; } // Состояние оценки (опционально)
+        [Required] // ИСПРАВЛЕНО: Сделано обязательным, как в AddGradeRequest
+        [StringLength(50)] // Соответствует nvarchar(50)
+        public string Status { get; set; } = string.Empty; // Состояние оценки
+
+        [StringLength(500)] // Соответствует nvarchar(500)
+        public string? Notes { get; set; } // ДОБАВЛЕНО: Поле для заметок
 
         // --- НОВОЕ: Поля для аудита ---
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow; // Дата создания записи об оценке

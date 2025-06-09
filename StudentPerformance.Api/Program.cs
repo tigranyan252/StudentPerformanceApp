@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -9,58 +8,71 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using Microsoft.OpenApi.Models;
 using AutoMapper;
-
 using StudentPerformance.Api.Data;
-using StudentPerformance.Api.Data.Entities; // For your 'User' entity
-using StudentPerformance.Api.Services; // For UserService, GradeService, RoleService (if they are here)
-using StudentPerformance.Api.Services.Interfaces; // <--- ADD/ENSURE THIS IS PRESENT for SimplePasswordHasher and ILogger (if your ILogger is defined here)
-// using StudentPerformance.Api.Utilities; // <--- REMOVE/COMMENT OUT THIS ONE if SimplePasswordHasher is NOT here
-
-using Microsoft.Extensions.Logging; // This is typically for ILogger, usually not in Services.Interfaces
+using StudentPerformance.Api.Services;
+using StudentPerformance.Api.Services.Interfaces; // Убедитесь, что здесь есть IAssignmentService
+using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Identity;
-using StudentPerformance.Api.Utilities; // This provides IPasswordHasher<TUser>
-
-
-// --- Начало Program.cs ---
+using StudentPerformance.Api.Data.Entities;
+using StudentPerformance.Api.Utilities; // For IPasswordHasher<TUser> and MappingProfile
+using System;
+using StudentPerformance.Api; // For InvalidOperationException
 
 var builder = WebApplication.CreateBuilder(args);
 
 // --- 1. Configure Services ---
-
+// Add controllers (API controllers)
 builder.Services.AddControllers();
 
+// Register custom services for Dependency Injection
+builder.Services.AddScoped<IUserService, UserService>();
+builder.Services.AddScoped<IGradeService, GradeService>();
+builder.Services.AddScoped<IRoleService, RoleService>();
+
+// ИСПРАВЛЕНО: Регистрация сервиса для ОБЩИХ заданий (Assignment)
+builder.Services.AddScoped<IAssignmentService, AssignmentService>(); // <-- НОВОЕ: ЭТО БЫЛО ОТСУТСТВУЕТ!
+
+// ИСПРАВЛЕНО: Правильная регистрация сервиса для НАЗНАЧЕНИЙ (TeacherSubjectGroupAssignment)
+builder.Services.AddScoped<ITeacherSubjectGroupAssignmentService, TeacherSubjectGroupAssignmentService>();
+// УДАЛЕНО: Дублирующаяся строка для ITeacherSubjectGroupAssignmentService
+
+builder.Services.AddScoped<IGroupService, GroupService>();
+builder.Services.AddScoped<ISubjectService, SubjectService>();
+builder.Services.AddScoped<ISemesterService, SemesterService>();
+builder.Services.AddScoped<IStudentService, StudentService>();
+builder.Services.AddScoped<ITeacherService, TeacherService>();
+
+// НОВАЯ СТРОКА: Регистрация сервиса отчетов
+builder.Services.AddScoped<IReportService, ReportService>();
+
+// Register IPasswordHasher for hashing passwords
+builder.Services.AddScoped<IPasswordHasher<User>, SimplePasswordHasher>();
+
+// Configure AutoMapper (MappingProfile to map entities to DTOs)
+builder.Services.AddAutoMapper(typeof(MappingProfile).Assembly);
+
+// Configure DbContext for SQL Server
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-builder.Services.AddAutoMapper(typeof(Program));
+// --- 2. JWT Authentication Setup ---
+var jwtSecret = builder.Configuration["JwtSettings:Secret"];
+var jwtIssuer = builder.Configuration["JwtSettings:Issuer"];
+var jwtAudience = builder.Configuration["JwtSettings:Audience"];
 
-// Register your custom services for Dependency Injection.
-builder.Services.AddScoped<IUserService, UserService>();
+if (string.IsNullOrEmpty(jwtSecret))
+{
+    throw new InvalidOperationException("JWT Secret is not configured. Please add 'JwtSettings:Secret' to appsettings.json or user secrets.");
+}
+if (string.IsNullOrEmpty(jwtIssuer))
+{
+    throw new InvalidOperationException("JWT Issuer is not configured. Please add 'JwtSettings:Issuer' to appsettings.json or user secrets.");
+}
+if (string.IsNullOrEmpty(jwtAudience))
+{
+    throw new InvalidOperationException("JWT Audience is not configured. Please add 'JwtSettings:Audience' to appsettings.json or user secrets.");
+}
 
-builder.Services.AddScoped<IGradeService, GradeService>();
-
-// --- CORRECTED: Ensure the using for SimplePasswordHasher matches its actual namespace ---
-builder.Services.AddScoped<IPasswordHasher<User>, SimplePasswordHasher>();
-
-builder.Services.AddScoped<IRoleService, RoleService>();
-
-builder.Services.AddScoped<IAssignmentService, AssignmentService>();
-builder.Services.AddScoped<IGroupService, GroupService>();
-// In Program.cs (inside var builder = WebApplication.CreateBuilder(args); block)
-
-// ... existing service registrations ...
-
-builder.Services.AddScoped<IGroupService, GroupService>(); // Already added for GroupsController
-builder.Services.AddScoped<ISubjectService, SubjectService>(); // <--- ADD THIS
-builder.Services.AddScoped<ISemesterService, SemesterService>(); // <--- ADD THIS
-builder.Services.AddScoped<IAssignmentService, AssignmentService>(); // Already added for AssignmentsController
-builder.Services.AddScoped<IStudentService, StudentService>();
-builder.Services.AddAutoMapper(typeof(MappingProfile).Assembly);
-builder.Services.AddScoped<ISubjectService, SubjectService>();
-builder.Services.AddScoped<ITeacherService, TeacherService>();
-
-// ... rest of your service registrations ...
-// Configure JWT Authentication.
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -70,15 +82,16 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateAudience = true,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
-            ValidIssuer = builder.Configuration["JwtSettings:Issuer"],
-            ValidAudience = builder.Configuration["JwtSettings:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["JwtSettings:Secret"]))
+            ValidIssuer = jwtIssuer,
+            ValidAudience = jwtAudience,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret))
         };
     });
 
+// --- 3. Authorization Setup ---
 builder.Services.AddAuthorization();
 
-// Configure Swagger/OpenAPI for API documentation.
+// --- 4. Swagger/OpenAPI Setup ---
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -107,30 +120,31 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
-// Configure CORS
+// --- 5. CORS Setup ---
+const string AllowReactAppSpecificOrigins = "_allowReactAppSpecificOrigins";
+
 builder.Services.AddCors(options =>
 {
-    options.AddDefaultPolicy(policy =>
+    options.AddPolicy(name: AllowReactAppSpecificOrigins, policy =>
     {
-        policy.AllowAnyOrigin()
+        policy.WithOrigins("http://localhost:3000")
               .AllowAnyMethod()
-              .AllowAnyHeader();
+              .AllowAnyHeader()
+              .AllowCredentials();
     });
 });
 
-
 var app = builder.Build();
 
-// --- Data Seeding Section ---
+// --- 6. Data Seeding Section ---
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
     try
     {
         var context = services.GetRequiredService<ApplicationDbContext>();
-        // context.Database.Migrate();
-
-        DataSeeder.SeedData(context);
+        context.Database.Migrate(); // Applies any pending migrations for the database
+        DataSeeder.SeedData(context); // Make sure DataSeeder.SeedData handles existing data gracefully
     }
     catch (Exception ex)
     {
@@ -140,9 +154,7 @@ using (var scope = app.Services.CreateScope())
 }
 // --- End Data Seeding Section ---
 
-
-// --- 2. Configure the HTTP request pipeline (Middleware) ---
-
+// --- 7. Configure the HTTP request pipeline (Middleware) ---
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -154,12 +166,12 @@ else
     app.UseHttpsRedirection();
 }
 
-app.UseCors();
+app.UseCors(AllowReactAppSpecificOrigins); // CORS must be before UseRouting, UseAuthentication, UseAuthorization
+
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
-app.MapControllers();
+
+app.MapControllers(); // Maps controller routes
 
 app.Run();
-
-// --- Конец Program.cs ---

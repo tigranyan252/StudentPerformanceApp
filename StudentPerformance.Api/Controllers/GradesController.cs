@@ -1,595 +1,273 @@
 ﻿// Path: StudentPerformance.Api/Controllers/GradesController.cs
 
-
-
-using Microsoft.AspNetCore.Mvc; // Для ControllerBase, HttpGet, HttpPost, HttpPut, HttpDelete, FromQuery, FromBody, ProducesResponseType
-
-using StudentPerformance.Api.Models.DTOs; // Для GradeDto, AddGradeRequest, UpdateGradeRequest
-
-using StudentPerformance.Api.Services; // Для GradeService, UserService
-
-using System.Collections.Generic; // Для List<T>
-
-using System.Threading.Tasks; // Для Task
-
-using Microsoft.AspNetCore.Authorization; // Для атрибута [Authorize]
-
-using System.Security.Claims; // Для работы с Claims (получение ID пользователя из JWT токена)
-
-using System; // Для исключений (UnauthorizedAccessException, ArgumentException, InvalidOperationException)
-
-
+using Microsoft.AspNetCore.Mvc;
+using StudentPerformance.Api.Models.DTOs;
+using StudentPerformance.Api.Services.Interfaces;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
+using System.Security.Claims;
+using System;
+using Microsoft.Extensions.Logging;
+using StudentPerformance.Api.Models.Requests;
+using static StudentPerformance.Api.Utilities.UserRoles;
+using StudentPerformance.Api.Services;
 
 namespace StudentPerformance.Api.Controllers
-
 {
-
-    [ApiController] // Указывает, что этот контроллер обслуживает HTTP API запросы
-
-    [Route("api/[controller]")] // Определяет базовый маршрут для контроллера (например, /api/Grades)
-
-    [Authorize] // Применяет политику авторизации ко всем методам в этом контроллере.
-
-    // Это означает, что для доступа к любому эндпоинту здесь, пользователь должен быть аутентифицирован.
-
+    [ApiController]
+    [Route("api/[controller]")]
+    [Authorize]
     public class GradesController : ControllerBase
-
     {
+        private readonly IGradeService _gradeService;
+        private readonly IUserService _userService;
+        private readonly ILogger<GradesController> _logger;
 
-        private readonly GradeService _gradeService; // Внедрение GradeService для выполнения операций с оценками
-
-        private readonly UserService _userService;      // Внедрение UserService для выполнения проверок авторизации и получения данных пользователя
-
-
-
-        // Конструктор контроллера: зависимости внедряются автоматически фреймворком
-
-        public GradesController(GradeService gradeService, UserService userService)
-
+        public GradesController(IGradeService gradeService, IUserService userService, ILogger<GradesController> logger)
         {
-
             _gradeService = gradeService;
-
             _userService = userService;
-
+            _logger = logger;
         }
 
-
-
-        // Вспомогательный метод для безопасного извлечения ID текущего пользователя из JWT токена
-
-        // Это централизованное место для получения userId из ClaimsPrincipal (User)
-
-        private int GetCurrentUserId()
-
+        private int GetCurrentUserId()
         {
-
-            // ClaimTypes.NameIdentifier обычно содержит ID пользователя после аутентификации
-
-            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
 
             if (userIdClaim != null && int.TryParse(userIdClaim.Value, out int userId))
-
             {
-
                 return userId;
-
             }
 
-            // Если ID пользователя не найден или недействителен, выбрасываем исключение.
-
-            // Это должно быть поймано middleware аутентификации/авторизации, но здесь для надежности.
-
-            throw new UnauthorizedAccessException("User ID claim not found or is invalid.");
-
+            _logger.LogWarning("User ID claim not found or invalid in token. Throwing UnauthorizedAccessException.");
+            throw new UnauthorizedAccessException("User ID claim not found or is invalid in authenticated user context.");
         }
 
-
-
-        /// <summary>
-
-        /// Получает список всех оценок, с возможностью фильтрации.
-
-        /// Правила доступа:
-
-        /// - **Администратор**: может просматривать любые оценки, используя любые фильтры.
-
-        /// - **Преподаватель**: может просматривать свои оценки или оценки студентов, которым он преподает.
-
-        /// - **Студент**: может просматривать только свои оценки.
-
-        /// </summary>
-
-        /// <param name="studentId">ID студента для фильтрации (опционально).</param>
-
-        /// <param name="teacherId">ID преподавателя для фильтрации (опционально).</param>
-
-        /// <param name="subjectId">ID предмета для фильтрации (опционально).</param>
-
-        /// <param name="semesterId">ID семестра для фильтрации (опционально).</param>
-
-        /// <returns>HTTP 200 OK со списком GradeDto, 401 Unauthorized, 403 Forbidden.</returns>
-
-        [HttpGet]
-
+        [HttpGet]
         [ProducesResponseType(200, Type = typeof(List<GradeDto>))]
-
-        [ProducesResponseType(401)] // Unauthorized
-
-        [ProducesResponseType(403)] // Forbidden
-
-        public async Task<IActionResult> GetAllGrades(
-
-      [FromQuery] int? studentId = null,
-
-      [FromQuery] int? teacherId = null,
-
-      [FromQuery] int? subjectId = null,
-
-      [FromQuery] int? semesterId = null)
-
+        [ProducesResponseType(401)]
+        [ProducesResponseType(403)]
+        public async Task<IActionResult> GetAllGrades(
+            [FromQuery] int? studentId = null,
+            [FromQuery] int? teacherId = null, // Этот параметр будет игнорироваться для авторизованного учителя
+            [FromQuery] int? subjectId = null,
+            [FromQuery] int? semesterId = null)
         {
+            var currentUserId = GetCurrentUserId();
+            var currentUserRole = await _userService.GetUserRoleAsync(currentUserId);
 
-            var currentUserId = GetCurrentUserId(); // Получаем ID текущего пользователя
+            _logger.LogInformation("GetAllGrades requested by UserId: {CurrentUserId}, Role: {CurrentUserRole}", currentUserId, currentUserRole);
+            _logger.LogInformation("Query parameters received: StudentId={StudentId}, TeacherId={TeacherId}, SubjectId={SubjectId}, SemesterId={SemesterId}", studentId, teacherId, subjectId, semesterId);
 
-            var currentUserRole = await _userService.GetUserRoleAsync(currentUserId); // Получаем роль пользователя
-
-
-
-            // Логика авторизации в зависимости от роли
-
-            if (currentUserRole == "Администратор")
-
+            if (currentUserRole == Administrator)
             {
-
-                // Администратор может получить любые оценки с любыми фильтрами
-
-                var grades = await _gradeService.GetAllGradesAsync(studentId, teacherId, subjectId, semesterId);
-
+                _logger.LogInformation("User is Administrator. Retrieving all grades with provided filters.");
+                var grades = await _gradeService.GetAllGradesAsync(studentId, teacherId, subjectId, semesterId);
                 return Ok(grades);
-
             }
-
-            else if (currentUserRole == "Преподаватель")
-
+            else if (currentUserRole == Teacher)
             {
-
                 var teacherProfile = await _userService.GetTeacherByIdAsync(currentUserId);
 
                 if (teacherProfile == null)
-
                 {
-
-                    return Forbid("Teacher profile not found for this user."); // Преподавательский профиль не найден
-
-                }
-
-
-
-                // Преподаватель может видеть только свои оценки или оценки студентов, которым он преподает
-
-                // Если в запросе указан teacherId, и он не совпадает с ID текущего преподавателя, доступ запрещен
-
-                if (teacherId.HasValue && teacherId.Value != teacherProfile.TeacherId)
-
-                {
-
-                    return Forbid("Teachers are only allowed to view their own grades or grades they are authorized to view.");
-
+                    _logger.LogWarning("Teacher profile not found for UserId: {CurrentUserId}. Denying access.", currentUserId);
+                    return StatusCode(403, new { message = "Teacher profile not found for this user. Access denied." });
                 }
 
+                _logger.LogInformation("Authenticated Teacher Profile ID: {TeacherProfileId} (associated with UserId: {CurrentUserId})", teacherProfile.TeacherId, currentUserId);
 
+                // УДАЛЕНО: Условие, которое сравнивало teacherId из запроса с teacherProfile.TeacherId
+                // Это условие приводило к 403 Forbidden, когда фронтенд отправлял UserId вместо TeacherId.
+                // Вместо этого, мы принудительно фильтруем по teacherProfile.TeacherId текущего авторизованного преподавателя.
 
-                // Проверяем, если был запрошен studentId, имеет ли текущий преподаватель право просматривать оценки этого студента
+                _logger.LogInformation("Retrieving grades for authenticated Teacher (TeacherId: {ActualTeacherId}) with StudentId: {StudentId}, SubjectId: {SubjectId}, SemesterId: {SemesterId}", teacherProfile.TeacherId, studentId, subjectId, semesterId);
 
-                if (studentId.HasValue)
-
-                {
-
-                    var canViewStudentGrades = await _userService.CanTeacherViewStudentGrades(teacherProfile.TeacherId, studentId.Value);
-
-                    if (!canViewStudentGrades)
-
-                    {
-
-                        return Forbid($"Teacher is not authorized to view grades for student ID {studentId.Value}.");
-
-                    }
-
-                }
-
-
-
-                // Фильтруем результаты по ID текущего преподавателя по умолчанию
-
-                var grades = await _gradeService.GetAllGradesAsync(studentId, teacherProfile.TeacherId, subjectId, semesterId);
-
+                // Всегда используем teacherProfile.TeacherId для фильтрации, чтобы учитель видел ТОЛЬКО свои оценки.
+                // Параметр teacherId из FromQuery игнорируется в этом случае для целей авторизации/фильтрации.
+                var grades = await _gradeService.GetAllGradesAsync(studentId, teacherProfile.TeacherId, subjectId, semesterId);
                 return Ok(grades);
-
             }
-
-            else if (currentUserRole == "Студент")
-
+            else if (currentUserRole == Student)
             {
-
                 var studentProfile = await _userService.GetStudentByIdAsync(currentUserId);
 
                 if (studentProfile == null)
-
                 {
+                    _logger.LogWarning("Student profile not found for UserId: {CurrentUserId}. Denying access.", currentUserId);
+                    return StatusCode(403, new { message = "Student profile not found for this user. Access denied." });
+                }
 
-                    return Forbid("Student profile not found for this user."); // Студенческий профиль не найден
+                _logger.LogInformation("Authenticated Student Profile ID: {StudentProfileId} (associated with UserId: {CurrentUserId})", studentProfile.StudentId, currentUserId);
 
-                }
+                if (studentId.HasValue && studentId.Value != studentProfile.StudentId)
+                {
+                    _logger.LogWarning("Access denied for Student (UserId: {CurrentUserId}, StudentProfileId: {ActualStudentId}): Requested grades for StudentId {RequestedStudentId} which does not match their own.", currentUserId, studentProfile.StudentId, studentId.Value);
+                    return StatusCode(403, new { message = "Students are only allowed to view their own grades." });
+                }
 
-
-
-                // Студент может просматривать только свои оценки. Игнорируем любой переданный studentId и используем ID текущего студента.
-
-                var grades = await _gradeService.GetAllGradesAsync(studentProfile.StudentId, null, subjectId, semesterId);
-
+                _logger.LogInformation("Retrieving grades for authenticated Student (StudentId: {ActualStudentId}) with SubjectId: {SubjectId}, SemesterId: {SemesterId}", studentProfile.StudentId, subjectId, semesterId);
+                var grades = await _gradeService.GetAllGradesAsync(studentProfile.StudentId, null, subjectId, semesterId);
                 return Ok(grades);
-
             }
 
-
-
-            // Для любых других ролей доступ запрещен
-
-            return Forbid("Access denied for this role.");
-
+            _logger.LogWarning("Access denied for UserId: {CurrentUserId} with unknown or unauthorized role {CurrentUserRole}.", currentUserId, currentUserRole);
+            return StatusCode(403, new { message = "Access denied for this role." });
         }
 
-
-
-        /// <summary>
-
-        /// Получает конкретную оценку по ее ID.
-
-        /// Правила доступа:
-
-        /// - **Администратор**: может просматривать любую оценку.
-
-        /// - **Преподаватель**: может просматривать оценку, если он является преподавателем по связанному предмету и студенту, или если он является преподавателем, выставившим эту оценку.
-
-        /// - **Студент**: может просматривать только свои оценки.
-
-        /// </summary>
-
-        /// <param name="id">Идентификатор оценки.</param>
-
-        /// <returns>HTTP 200 OK с GradeDto, 401 Unauthorized, 403 Forbidden, 404 Not Found.</returns>
-
-        [HttpGet("{id}")]
-
+        [HttpGet("{id}")]
         [ProducesResponseType(200, Type = typeof(GradeDto))]
-
         [ProducesResponseType(401)]
-
         [ProducesResponseType(403)]
-
         [ProducesResponseType(404)]
-
         public async Task<IActionResult> GetGradeById(int id)
-
         {
-
             var currentUserId = GetCurrentUserId();
-
-
-
-            // Делегируем детальную проверку авторизации на UserService
-
-            // Этот метод в UserService должен учитывать роли и права доступа.
-
-            var isAuthorized = await _userService.CanUserViewGrade(currentUserId, id);
+            var isAuthorized = await _userService.CanUserViewGradeDetailsAsync(currentUserId, id);
 
             if (!isAuthorized)
-
             {
-
-                return Forbid("You are not authorized to view this grade.");
-
+                _logger.LogWarning("User {CurrentUserId} is not authorized to view grade ID {GradeId}.", currentUserId, id);
+                return StatusCode(403, new { message = "You are not authorized to view this grade." });
             }
-
-
 
             var grade = await _gradeService.GetGradeByIdAsync(id);
-
             if (grade == null)
-
             {
-
+                _logger.LogWarning("Grade with ID {GradeId} not found.", id);
                 return NotFound($"Grade with ID {id} not found.");
-
             }
 
+            _logger.LogInformation("Grade ID {GradeId} retrieved by user {CurrentUserId}.", id, currentUserId);
             return Ok(grade);
-
         }
 
-
-
-        /// <summary>
-
-        /// Добавляет новую оценку.
-
-        /// Правила доступа: Только преподаватель, который авторизован выставлять оценки для данного студента, предмета и семестра.
-
-        /// </summary>
-
-        /// <param name="request">Данные для создания новой оценки.</param>
-
-        /// <returns>HTTP 201 Created с созданной GradeDto, 400 Bad Request, 401 Unauthorized, 403 Forbidden, 500 Internal Server Error.</returns>
-
-        [HttpPost]
-
+        [HttpPost]
         [ProducesResponseType(201, Type = typeof(GradeDto))]
-
-        [ProducesResponseType(400)] // Bad Request (например, неверные входные данные)
-
-        [ProducesResponseType(401)] // Unauthorized (пользователь не аутентифицирован)
-
-        [ProducesResponseType(403)] // Forbidden (пользователь аутентифицирован, но не имеет прав)
-
-        [ProducesResponseType(500)] // Internal Server Error (неожиданные ошибки)
-
-        public async Task<IActionResult> AddGrade([FromBody] AddGradeRequest request)
-
-        {
-
-            // Проверка валидности модели DTO (на основе атрибутов валидации в AddGradeRequest)
-
-            if (!ModelState.IsValid)
-
-            {
-
-                return BadRequest(ModelState);
-
-            }
-
-
-
-            var currentUserId = GetCurrentUserId();
-
-
-
-            try
-
-            {
-
-                // Вызываем метод сервиса для добавления оценки, передавая ID текущего пользователя для авторизации
-
-                var newGrade = await _gradeService.AddGradeAsync(request, currentUserId);
-
-
-
-                // Возвращаем 201 Created с URI нового ресурса и сам ресурс
-
-                // nameof(GetGradeById) гарантирует, что имя метода контроллера будет взято корректно
-
-                return CreatedAtAction(nameof(GetGradeById), new { id = newGrade!.GradeId }, newGrade);
-
-            }
-
-            catch (UnauthorizedAccessException ex)
-
-            {
-
-                // Если GradeService выбросил исключение UnauthorizedAccessException, это означает 403 Forbidden
-
-                return Forbid(ex.Message);
-
-            }
-
-            catch (ArgumentException ex)
-
-            {
-
-                // Если GradeService выбросил ArgumentException (например, не найден студент/предмет/семестр), это 400 Bad Request
-
-                return BadRequest(ex.Message);
-
-            }
-
-            catch (InvalidOperationException ex)
-
-            {
-
-                // Если GradeService выбросил InvalidOperationException (например, профиль преподавателя не найден), это 500 Internal Server Error
-
-                return StatusCode(500, ex.Message);
-
-            }
-
-            catch (Exception ex)
-
-            {
-
-                // Логирование любого другого неожиданного исключения и возврат 500
-
-                // В реальном приложении здесь должно быть подробное логирование.
-
-                return StatusCode(500, "An unexpected error occurred: " + ex.Message);
-
-            }
-
-        }
-
-
-
-        /// <summary>
-
-        /// Обновляет существующую оценку.
-
-        /// Правила доступа: Только преподаватель, который авторизован обновлять данную конкретную оценку.
-
-        /// </summary>
-
-        /// <param name="id">Идентификатор обновляемой оценки.</param>
-
-        /// <param name="request">Данные для обновления оценки.</param>
-
-        /// <returns>HTTP 204 No Content при успешном обновлении, 400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found, 500 Internal Server Error.</returns>
-
-        [HttpPut("{id}")]
-
-        [ProducesResponseType(204)] // No Content
-
-        [ProducesResponseType(400)]
-
+        [ProducesResponseType(400)]
         [ProducesResponseType(401)]
-
         [ProducesResponseType(403)]
-
-        [ProducesResponseType(404)] // Not Found
-
-        [ProducesResponseType(500)]
-
-        public async Task<IActionResult> UpdateGrade(int id, [FromBody] UpdateGradeRequest request)
-
-        {
-
-            if (!ModelState.IsValid)
-
-            {
-
-                return BadRequest(ModelState);
-
-            }
-
-
-
-            var currentUserId = GetCurrentUserId();
-
-
-
-            try
-
-            {
-
-                // Вызываем метод сервиса для обновления оценки, передавая ID текущего пользователя для авторизации
-
-                var updated = await _gradeService.UpdateGradeAsync(id, request, currentUserId);
-
-                if (!updated)
-
-                {
-
-                    // Если метод сервиса вернул false, значит оценка не найдена
-
-                    return NotFound($"Grade with ID {id} not found or no changes were made.");
-
-                }
-
-                return NoContent(); // 204 No Content для успешного обновления без возврата тела
-
-            }
-
-            catch (UnauthorizedAccessException ex)
-
-            {
-
-                return Forbid(ex.Message);
-
-            }
-
-            catch (ArgumentException ex)
-
-            {
-
-                return BadRequest(ex.Message);
-
-            }
-
-            catch (Exception ex)
-
-            {
-
-                // Логирование и возврат 500
-
-                return StatusCode(500, "An unexpected error occurred: " + ex.Message);
-
-            }
-
-        }
-
-
-
-        /// <summary>
-
-        /// Удаляет оценку.
-
-        /// Правила доступа: Только преподаватель, который авторизован удалять данную конкретную оценку.
-
-        /// </summary>
-
-        /// <param name="id">Идентификатор удаляемой оценки.</param>
-
-        /// <returns>HTTP 204 No Content при успешном удалении, 401 Unauthorized, 403 Forbidden, 404 Not Found, 500 Internal Server Error.</returns>
-
-        [HttpDelete("{id}")]
-
-        [ProducesResponseType(204)] // No Content
-
-        [ProducesResponseType(401)]
-
-        [ProducesResponseType(403)]
-
-        [ProducesResponseType(404)]
-
         [ProducesResponseType(500)]
-
-        public async Task<IActionResult> DeleteGrade(int id)
-
+        public async Task<IActionResult> AddGrade([FromBody] AddGradeRequest request)
         {
+            if (!ModelState.IsValid)
+            {
+                _logger.LogWarning("Invalid ModelState for AddGrade request: {@ModelStateErrors}", ModelState);
+                return BadRequest(ModelState);
+            }
 
             var currentUserId = GetCurrentUserId();
 
-
-
             try
-
             {
-
-                // Вызываем метод сервиса для удаления оценки, передавая ID текущего пользователя для авторизации
-
-                var deleted = await _gradeService.DeleteGradeAsync(id, currentUserId);
-
-                if (!deleted)
-
-                {
-
-                    // Если метод сервиса вернул false, значит оценка не найдена
-
-                    return NotFound($"Grade with ID {id} not found.");
-
-                }
-
-                return NoContent(); // 204 No Content для успешного удаления
-
-            }
-
+                _logger.LogInformation("Attempting to add grade for StudentId: {StudentId}, AssignmentId: {AssignmentId} by UserId: {CurrentUserId}", request.StudentId, request.TeacherSubjectGroupAssignmentId, currentUserId);
+                var newGrade = await _gradeService.AddGradeAsync(request, currentUserId);
+                _logger.LogInformation("Grade {GradeId} added successfully by UserId: {CurrentUserId}.", newGrade?.GradeId, currentUserId);
+                return CreatedAtAction(nameof(GetGradeById), new { id = newGrade!.GradeId }, newGrade);
+            }
             catch (UnauthorizedAccessException ex)
-
             {
-
-                return Forbid(ex.Message);
-
+                _logger.LogWarning(ex, "Unauthorized access attempt in AddGrade by UserId: {CurrentUserId}: {Message}", currentUserId, ex.Message);
+                return StatusCode(403, new { message = ex.Message });
             }
-
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning(ex, "Invalid argument provided for AddGrade request: {Message}", ex.Message);
+                return BadRequest(ex.Message);
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger.LogError(ex, "Invalid operation occurred while adding grade: {Message}", ex.Message);
+                return StatusCode(500, ex.Message);
+            }
             catch (Exception ex)
-
             {
-
-                // Логирование и возврат 500
-
-                return StatusCode(500, "An unexpected error occurred: " + ex.Message);
-
+                _logger.LogError(ex, "An unexpected error occurred while adding grade by UserId: {CurrentUserId}.", currentUserId);
+                return StatusCode(500, "An unexpected error occurred: " + ex.Message);
             }
-
         }
 
-    }
+        [HttpPut("{id}")]
+        [ProducesResponseType(204)]
+        [ProducesResponseType(400)]
+        [ProducesResponseType(401)]
+        [ProducesResponseType(403)]
+        [ProducesResponseType(404)]
+        [ProducesResponseType(500)]
+        public async Task<IActionResult> UpdateGrade(int id, [FromBody] UpdateGradeRequest request)
+        {
+            if (!ModelState.IsValid)
+            {
+                _logger.LogWarning("Invalid ModelState for UpdateGrade request (Grade ID: {GradeId}): {@ModelStateErrors}", id, ModelState);
+                return BadRequest(ModelState);
+            }
 
+            var currentUserId = GetCurrentUserId();
+
+            try
+            {
+                _logger.LogInformation("Attempting to update grade ID {GradeId} by UserId: {CurrentUserId}", id, currentUserId);
+                var updated = await _gradeService.UpdateGradeAsync(id, request, currentUserId);
+                if (!updated)
+                {
+                    _logger.LogWarning("Grade with ID {GradeId} not found or update failed by UserId: {CurrentUserId}.", id, currentUserId);
+                    return NotFound($"Grade with ID {id} not found or no changes were made.");
+                }
+
+                _logger.LogInformation("Grade ID {GradeId} updated successfully by UserId: {CurrentUserId}.", id, currentUserId);
+                return NoContent();
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogWarning(ex, "Unauthorized access attempt in UpdateGrade by UserId: {CurrentUserId}: {Message}", currentUserId, ex.Message);
+                return StatusCode(403, new { message = ex.Message });
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning(ex, "Invalid argument provided for UpdateGrade request (Grade ID: {GradeId}): {Message}", id, ex.Message);
+                return BadRequest(ex.Message);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An unexpected error occurred while updating grade ID {GradeId} by UserId: {CurrentUserId}.", id, currentUserId);
+                return StatusCode(500, "An unexpected error occurred: " + ex.Message);
+            }
+        }
+
+        [HttpDelete("{id}")]
+        [ProducesResponseType(204)]
+        [ProducesResponseType(401)]
+        [ProducesResponseType(403)]
+        [ProducesResponseType(404)]
+        [ProducesResponseType(500)]
+        public async Task<IActionResult> DeleteGrade(int id)
+        {
+            var currentUserId = GetCurrentUserId();
+
+            try
+            {
+                _logger.LogInformation("Attempting to delete grade ID {GradeId} by UserId: {CurrentUserId}", id, currentUserId);
+                var deleted = await _gradeService.DeleteGradeAsync(id, currentUserId);
+                if (!deleted)
+                {
+                    _logger.LogWarning("Grade with ID {GradeId} not found for deletion by UserId: {CurrentUserId}.", id, currentUserId);
+                    return NotFound($"Grade with ID {id} not found.");
+                }
+
+                _logger.LogInformation("Grade ID {GradeId} deleted successfully by UserId: {CurrentUserId}.", id, currentUserId);
+                return NoContent();
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogWarning(ex, "Unauthorized access attempt in DeleteGrade by UserId: {CurrentUserId}: {Message}", currentUserId, ex.Message);
+                return StatusCode(403, new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An unexpected error occurred while deleting grade ID {GradeId} by UserId: {CurrentUserId}.", id, currentUserId);
+                return StatusCode(500, "An unexpected error occurred: " + ex.Message);
+            }
+        }
+    }
 }

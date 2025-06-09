@@ -140,7 +140,8 @@ namespace StudentPerformance.Api.Data
                 .HasOne(g => g.Student)
                 .WithMany(s => s.Grades)
                 .HasForeignKey(g => g.StudentId)
-                .OnDelete(DeleteBehavior.Cascade); // Удаление студента каскадно удаляет его оценки
+                // ИСПРАВЛЕНО: Изменено с Cascade на NoAction, чтобы избежать циклических или множественных каскадных путей
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Grade с Subject (опциональная прямая связь)
             modelBuilder.Entity<Grade>()
@@ -187,7 +188,8 @@ namespace StudentPerformance.Api.Data
                 .HasOne(att => att.Student)
                 .WithMany(s => s.Attendances)
                 .HasForeignKey(att => att.StudentId)
-                .OnDelete(DeleteBehavior.Cascade); // Удаление студента каскадно удаляет его записи о посещаемости
+                // ИСПРАВЛЕНО: Изменено с Cascade на NoAction, чтобы избежать циклических или множественных каскадных путей
+                .OnDelete(DeleteBehavior.NoAction);
 
             // Attendance с TeacherSubjectGroupAssignment
             modelBuilder.Entity<Attendance>()

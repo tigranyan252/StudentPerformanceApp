@@ -37,7 +37,7 @@ namespace StudentPerformance.Api.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
 
-                    b.Property<DateTime?>("DueDate")
+                    b.Property<DateTime>("DueDate")
                         .HasColumnType("datetime2");
 
                     b.Property<decimal>("MaxScore")
@@ -102,9 +102,10 @@ namespace StudentPerformance.Api.Migrations
 
                     b.HasKey("AttendanceId");
 
-                    b.HasIndex("StudentId");
-
                     b.HasIndex("TeacherSubjectGroupAssignmentId");
+
+                    b.HasIndex("StudentId", "TeacherSubjectGroupAssignmentId", "Date")
+                        .IsUnique();
 
                     b.ToTable("Attendances");
                 });
@@ -121,19 +122,25 @@ namespace StudentPerformance.Api.Migrations
                         .HasColumnType("int");
 
                     b.Property<string>("ControlType")
+                        .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
-                    b.Property<DateTime?>("DateReceived")
+                    b.Property<DateTime>("DateReceived")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
 
                     b.Property<int?>("SemesterId")
                         .HasColumnType("int");
 
                     b.Property<string>("Status")
+                        .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
@@ -152,7 +159,7 @@ namespace StudentPerformance.Api.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("datetime2");
 
-                    b.Property<decimal?>("Value")
+                    b.Property<decimal>("Value")
                         .HasColumnType("decimal(5, 2)");
 
                     b.HasKey("GradeId");
@@ -161,13 +168,15 @@ namespace StudentPerformance.Api.Migrations
 
                     b.HasIndex("SemesterId");
 
-                    b.HasIndex("StudentId");
-
                     b.HasIndex("SubjectId");
 
                     b.HasIndex("TeacherId");
 
                     b.HasIndex("TeacherSubjectGroupAssignmentId");
+
+                    b.HasIndex("StudentId", "AssignmentId")
+                        .IsUnique()
+                        .HasFilter("[AssignmentId] IS NOT NULL");
 
                     b.ToTable("Grades");
                 });
@@ -180,8 +189,17 @@ namespace StudentPerformance.Api.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("GroupId"));
 
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -191,10 +209,10 @@ namespace StudentPerformance.Api.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("datetime2");
 
-                    b.Property<int?>("YearOfStudy")
-                        .HasColumnType("int");
-
                     b.HasKey("GroupId");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
 
                     b.ToTable("Groups");
                 });
@@ -224,6 +242,9 @@ namespace StudentPerformance.Api.Migrations
 
                     b.HasKey("RoleId");
 
+                    b.HasIndex("Name")
+                        .IsUnique();
+
                     b.ToTable("Roles");
                 });
 
@@ -235,11 +256,18 @@ namespace StudentPerformance.Api.Migrations
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("SemesterId"));
 
+                    b.Property<string>("Code")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
                     b.Property<DateTime>("EndDate")
                         .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -253,6 +281,9 @@ namespace StudentPerformance.Api.Migrations
                         .HasColumnType("datetime2");
 
                     b.HasKey("SemesterId");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
 
                     b.ToTable("Semesters");
                 });
@@ -268,13 +299,13 @@ namespace StudentPerformance.Api.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
-                    b.Property<DateTime>("DateOfBirth")
+                    b.Property<DateTime?>("DateOfBirth")
                         .HasColumnType("datetime2");
 
-                    b.Property<DateTime>("EnrollmentDate")
+                    b.Property<DateTime?>("EnrollmentDate")
                         .HasColumnType("datetime2");
 
-                    b.Property<int?>("GroupId")
+                    b.Property<int>("GroupId")
                         .HasColumnType("int");
 
                     b.Property<bool>("IsActive")
@@ -324,6 +355,9 @@ namespace StudentPerformance.Api.Migrations
                         .HasColumnType("datetime2");
 
                     b.HasKey("SubjectId");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
 
                     b.ToTable("Subjects");
                 });
@@ -395,7 +429,9 @@ namespace StudentPerformance.Api.Migrations
 
                     b.HasIndex("SubjectId");
 
-                    b.HasIndex("TeacherId");
+                    b.HasIndex("TeacherId", "SubjectId", "GroupId", "SemesterId")
+                        .IsUnique()
+                        .HasFilter("[GroupId] IS NOT NULL");
 
                     b.ToTable("TeacherSubjectGroupAssignments");
                 });
@@ -445,6 +481,9 @@ namespace StudentPerformance.Api.Migrations
 
                     b.HasIndex("RoleId");
 
+                    b.HasIndex("Username")
+                        .IsUnique();
+
                     b.ToTable("Users");
                 });
 
@@ -464,7 +503,7 @@ namespace StudentPerformance.Api.Migrations
                     b.HasOne("StudentPerformance.Api.Data.Entities.Student", "Student")
                         .WithMany("Attendances")
                         .HasForeignKey("StudentId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.NoAction)
                         .IsRequired();
 
                     b.HasOne("StudentPerformance.Api.Data.Entities.TeacherSubjectGroupAssignment", "TeacherSubjectGroupAssignment")
@@ -488,18 +527,18 @@ namespace StudentPerformance.Api.Migrations
                     b.HasOne("StudentPerformance.Api.Data.Entities.Semester", "Semester")
                         .WithMany("Grades")
                         .HasForeignKey("SemesterId")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .OnDelete(DeleteBehavior.SetNull);
 
                     b.HasOne("StudentPerformance.Api.Data.Entities.Student", "Student")
                         .WithMany("Grades")
                         .HasForeignKey("StudentId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.NoAction)
                         .IsRequired();
 
                     b.HasOne("StudentPerformance.Api.Data.Entities.Subject", "Subject")
                         .WithMany("Grades")
                         .HasForeignKey("SubjectId")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .OnDelete(DeleteBehavior.SetNull);
 
                     b.HasOne("StudentPerformance.Api.Data.Entities.Teacher", "Teacher")
                         .WithMany("Grades")
@@ -507,9 +546,9 @@ namespace StudentPerformance.Api.Migrations
                         .OnDelete(DeleteBehavior.SetNull);
 
                     b.HasOne("StudentPerformance.Api.Data.Entities.TeacherSubjectGroupAssignment", "TeacherSubjectGroupAssignment")
-                        .WithMany()
+                        .WithMany("Grades")
                         .HasForeignKey("TeacherSubjectGroupAssignmentId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.Navigation("Assignment");
@@ -649,6 +688,8 @@ namespace StudentPerformance.Api.Migrations
                     b.Navigation("Assignments");
 
                     b.Navigation("Attendances");
+
+                    b.Navigation("Grades");
                 });
 
             modelBuilder.Entity("StudentPerformance.Api.Data.Entities.User", b =>

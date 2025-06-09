@@ -12,7 +12,7 @@ namespace StudentPerformance.Api.Data
     {
         public static void SeedData(ApplicationDbContext context)
         {
-            context.Database.EnsureCreated();
+            context.Database.EnsureCreated(); // Consider using context.Database.Migrate() if using migrations
 
             Role adminRole, teacherRole, studentRole;
             List<User> allUsers;
@@ -48,7 +48,6 @@ namespace StudentPerformance.Api.Data
             if (!context.Users.Any())
             {
                 var userFaker = new Faker<User>()
-                    // REMOVED: .RuleFor(u => u.Id, f => f.IndexFaker + 1) <--- REMOVE THIS LINE
                     .RuleFor(u => u.Username, f => f.Internet.UserName())
                     .RuleFor(u => u.PasswordHash, f => BCrypt.Net.BCrypt.HashPassword("password123"))
                     .RuleFor(u => u.FirstName, f => f.Name.FirstName())
@@ -75,9 +74,9 @@ namespace StudentPerformance.Api.Data
             if (!context.Groups.Any())
             {
                 var groupFaker = new Faker<Group>()
-                    // REMOVED: .RuleFor(g => g.GroupId, f => f.IndexFaker + 1) <--- REMOVE THIS LINE
                     .RuleFor(g => g.Name, f => $"Группа {f.Random.AlphaNumeric(3).ToUpper()}")
-                    .RuleFor(g => g.YearOfStudy, f => f.Random.Int(1, 4))
+                    .RuleFor(g => g.Code, f => f.Finance.Account(4))
+                    .RuleFor(g => g.Description, f => f.Lorem.Sentence())
                     .RuleFor(g => g.CreatedAt, f => f.Date.Past(1))
                     .RuleFor(g => g.UpdatedAt, f => f.Date.Recent(1));
                 context.Groups.AddRange(groupFaker.Generate(5));
@@ -89,7 +88,6 @@ namespace StudentPerformance.Api.Data
             if (!context.Subjects.Any())
             {
                 var subjectFaker = new Faker<Subject>()
-                    // REMOVED: .RuleFor(s => s.SubjectId, f => f.IndexFaker + 1) <--- REMOVE THIS LINE
                     .RuleFor(s => s.Name, f => f.Commerce.ProductName())
                     .RuleFor(s => s.Code, f => f.Random.AlphaNumeric(5).ToUpper())
                     .RuleFor(s => s.Description, f => f.Lorem.Sentence())
@@ -103,14 +101,15 @@ namespace StudentPerformance.Api.Data
             // 5. Seed Semesters
             if (!context.Semesters.Any())
             {
-                var semesterFaker = new Faker<Semester>()
-                    // REMOVED: .RuleFor(s => s.SemesterId, f => f.IndexFaker + 1) <--- REMOVE THIS LINE
-                    .RuleFor(s => s.Name, f => $"{f.Date.Recent(1).Year} {f.PickRandom("Весенний", "Осенний")}")
-                    .RuleFor(s => s.StartDate, f => f.Date.Recent(1, DateTime.Now.AddMonths(-6)))
-                    .RuleFor(s => s.EndDate, (f, s) => s.StartDate.AddMonths(4))
-                    .RuleFor(s => s.CreatedAt, f => f.Date.Past(1))
-                    .RuleFor(s => s.UpdatedAt, f => f.Date.Recent(1));
-                context.Semesters.AddRange(semesterFaker.Generate(4));
+                var currentYear = DateTime.Now.Year;
+                var semestersToSeed = new List<Semester>
+                {
+                    new Semester { Name = $"{currentYear} Весенний", StartDate = new DateTime(currentYear, 2, 1), EndDate = new DateTime(currentYear, 6, 30), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow },
+                    new Semester { Name = $"{currentYear} Осенний", StartDate = new DateTime(currentYear, 9, 1), EndDate = new DateTime(currentYear, 12, 31), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow },
+                    new Semester { Name = $"{currentYear - 1} Весенний", StartDate = new DateTime(currentYear - 1, 2, 1), EndDate = new DateTime(currentYear - 1, 6, 30), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow },
+                    new Semester { Name = $"{currentYear - 1} Осенний", StartDate = new DateTime(currentYear - 1, 9, 1), EndDate = new DateTime(currentYear - 1, 12, 31), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow }
+                };
+                context.Semesters.AddRange(semestersToSeed);
                 context.SaveChanges();
             }
             semesters = context.Semesters.ToList();
@@ -120,10 +119,9 @@ namespace StudentPerformance.Api.Data
             if (!context.Students.Any())
             {
                 var generatedStudents = new List<Student>();
-                var studentDataFaker = new Faker(); // Базовый Faker для генерации данных
+                var studentDataFaker = new Faker();
                 foreach (var user in studentUsers)
                 {
-                    // No need for usedStudentUserIds since UserId is a FK and not the PK of Student
                     generatedStudents.Add(new Student
                     {
                         UserId = user.Id,
@@ -145,10 +143,9 @@ namespace StudentPerformance.Api.Data
             if (!context.Teachers.Any())
             {
                 var generatedTeachers = new List<Teacher>();
-                var teacherDataFaker = new Faker(); // Базовый Faker для генерации данных
+                var teacherDataFaker = new Faker();
                 foreach (var user in teacherUsers)
                 {
-                    // No need for usedTeacherUserIds
                     generatedTeachers.Add(new Teacher
                     {
                         UserId = user.Id,
@@ -167,15 +164,36 @@ namespace StudentPerformance.Api.Data
             // 8. Seed TeacherSubjectGroupAssignments
             if (!context.TeacherSubjectGroupAssignments.Any())
             {
-                var assignmentFaker = new Faker<TeacherSubjectGroupAssignment>()
-                    // REMOVED: .RuleFor(tsga => tsga.TeacherSubjectGroupAssignmentId, f => f.IndexFaker + 1) <--- REMOVE THIS LINE
-                    .RuleFor(tsga => tsga.TeacherId, f => f.PickRandom(teachers).TeacherId)
-                    .RuleFor(tsga => tsga.SubjectId, f => f.PickRandom(subjects).SubjectId)
-                    .RuleFor(tsga => tsga.GroupId, f => f.PickRandom(groups).GroupId)
-                    .RuleFor(tsga => tsga.SemesterId, f => f.PickRandom(semesters).SemesterId)
-                    .RuleFor(tsga => tsga.CreatedAt, f => f.Date.Past(1))
-                    .RuleFor(tsga => tsga.UpdatedAt, f => f.Date.Recent(1));
-                context.TeacherSubjectGroupAssignments.AddRange(assignmentFaker.Generate(20));
+                var uniqueAssignments = new HashSet<(int TeacherId, int SubjectId, int GroupId, int SemesterId)>();
+                var generatedAssignments = new List<TeacherSubjectGroupAssignment>();
+                var faker = new Faker();
+
+                int maxAttempts = 100;
+                int desiredAssignments = 20;
+
+                for (int i = 0; generatedAssignments.Count < desiredAssignments && i < maxAttempts; i++)
+                {
+                    var teacher = faker.PickRandom(teachers);
+                    var subject = faker.PickRandom(subjects);
+                    var group = faker.PickRandom(groups);
+                    var semester = faker.PickRandom(semesters);
+
+                    var currentCombination = (teacher.TeacherId, subject.SubjectId, group.GroupId, semester.SemesterId);
+
+                    if (uniqueAssignments.Add(currentCombination))
+                    {
+                        generatedAssignments.Add(new TeacherSubjectGroupAssignment
+                        {
+                            TeacherId = teacher.TeacherId,
+                            SubjectId = subject.SubjectId,
+                            GroupId = group.GroupId,
+                            SemesterId = semester.SemesterId,
+                            CreatedAt = faker.Date.Past(1),
+                            UpdatedAt = faker.Date.Recent(1)
+                        });
+                    }
+                }
+                context.TeacherSubjectGroupAssignments.AddRange(generatedAssignments);
                 context.SaveChanges();
             }
             teacherSubjectGroupAssignments = context.TeacherSubjectGroupAssignments.ToList();
@@ -185,14 +203,13 @@ namespace StudentPerformance.Api.Data
             if (!context.Assignments.Any())
             {
                 var assignmentFaker = new Faker<Assignment>()
-                    // REMOVED: .RuleFor(a => a.AssignmentId, f => f.IndexFaker + 1) <--- REMOVE THIS LINE
                     .RuleFor(a => a.TeacherSubjectGroupAssignmentId, f => f.PickRandom(teacherSubjectGroupAssignments).TeacherSubjectGroupAssignmentId)
                     .RuleFor(a => a.Title, f => f.Commerce.ProductName())
                     .RuleFor(a => a.Description, f => f.Lorem.Sentence())
                     .RuleFor(a => a.Type, f => f.PickRandom("Quiz", "Homework", "Project", "Exam"))
                     .RuleFor(a => a.MaxScore, f => f.Random.Decimal(5, 100))
                     .RuleFor(a => a.DueDate, f => f.Date.Future(1))
-            .RuleFor(a => a.SubmissionDate, (f, a) => f.Date.Between(a.CreatedAt, a.DueDate))
+                    .RuleFor(a => a.SubmissionDate, (f, a) => f.Date.Between(a.CreatedAt, a.DueDate))
                     .RuleFor(a => a.CreatedAt, f => f.Date.Past(1))
                     .RuleFor(a => a.UpdatedAt, f => f.Date.Recent(1));
                 context.Assignments.AddRange(assignmentFaker.Generate(50));
@@ -204,7 +221,6 @@ namespace StudentPerformance.Api.Data
             if (!context.Attendances.Any())
             {
                 var attendanceFaker = new Faker<Attendance>()
-                    // REMOVED: .RuleFor(a => a.AttendanceId, f => f.IndexFaker + 1) <--- REMOVE THIS LINE
                     .RuleFor(a => a.StudentId, f => f.PickRandom(students).StudentId)
                     .RuleFor(a => a.TeacherSubjectGroupAssignmentId, f => f.PickRandom(teacherSubjectGroupAssignments).TeacherSubjectGroupAssignmentId)
                     .RuleFor(a => a.Date, f => f.Date.Recent(30))
@@ -239,16 +255,16 @@ namespace StudentPerformance.Api.Data
                             {
                                 context.Grades.Add(new Grade
                                 {
-                                    // REMOVED: .RuleFor(g => g.GradeId, f => f.IndexFaker + 1) <--- REMOVE THIS LINE
                                     StudentId = student.StudentId,
-                                    SubjectId = subjectForGrade?.SubjectId, // Now correctly nullable as per your model
-                                    SemesterId = semesterForGrade?.SemesterId, // Now correctly nullable
+                                    SubjectId = subjectForGrade?.SubjectId,
+                                    SemesterId = semesterForGrade?.SemesterId,
                                     TeacherId = teacherForGrade?.TeacherId,
-                                    TeacherSubjectGroupAssignmentId = tsga.TeacherSubjectGroupAssignmentId, // This is now correct since you added it to Grade.cs
+                                    TeacherSubjectGroupAssignmentId = tsga.TeacherSubjectGroupAssignmentId,
                                     Value = baseFaker.Random.Decimal(0, 100),
                                     ControlType = baseFaker.PickRandom("Quiz", "Exam", "Lab", "Project"),
                                     DateReceived = baseFaker.Date.Recent(60),
                                     Status = baseFaker.PickRandom("Passed", "Failed", "Pending"),
+                                    Notes = baseFaker.Lorem.Sentence(), // ДОБАВЛЕНО: Генерация заметок
                                     CreatedAt = DateTime.UtcNow,
                                     UpdatedAt = DateTime.UtcNow
                                 });

@@ -1,8 +1,8 @@
 ﻿// Path: Models/DTOs/AddSubjectRequest.cs
 
-using System.ComponentModel.DataAnnotations; // Required for validation attributes like [Required], [StringLength]
+using System.ComponentModel.DataAnnotations;
 
-namespace StudentPerformance.Api.Models.DTOs
+namespace StudentPerformance.Api.Models.Requests
 {
     // DTO (Data Transfer Object) for data sent by the client
     // when requesting to ADD a new subject.

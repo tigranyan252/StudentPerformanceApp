@@ -49,6 +49,16 @@ namespace StudentPerformance.Api.Data.Entities
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow; // Дата создания записи
         public DateTime? UpdatedAt { get; set; } // Дата последнего обновления записи
 
+        // ДОБАВЛЕНО: Вычисляемое свойство FullName
+        // [NotMapped] указывает EF Core, что это свойство не должно быть столбцом в базе данных.
+        // Оно генерируется на лету при обращении к нему.
+        [NotMapped]
+        public string FullName => $"{FirstName} {LastName}".Trim();
+
+        // НОВОЕ (или подтвержденное, что должно быть): Вычисляемое свойство для типа пользователя (роли)
+        [NotMapped] // Указываем, что это свойство не должно быть столбцом в базе данных
+        public string UserType => Role?.Name ?? "Unknown"; // Возвращает имя роли или "Unknown", если роль не загружена
+
         // --- Navigation Properties for Relationships ---
 
         // A User can be a Student (one-to-one relationship)

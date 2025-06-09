@@ -1,24 +1,28 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using StudentPerformance.Api.Services; // Assuming IUserService is in this namespace
+﻿// Path: StudentPerformance.Api/Controllers/UsersController.cs
+
+using Microsoft.AspNetCore.Mvc;
 using StudentPerformance.Api.Models.DTOs;
-using StudentPerformance.Api.Exceptions; // Ensure this is the correct path to your exceptions
 using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
-using System.Threading.Tasks;
 using System.Collections.Generic;
-using Microsoft.Extensions.Logging; // For logging
+using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http; // For StatusCodes
 using System;
-using System.ComponentModel.DataAnnotations; // For generic Exception
+using StudentPerformance.Api.Models.Requests;
+using StudentPerformance.Api.Services.Interfaces; // Для интерфейсов IUserService, IJwtService
+using static StudentPerformance.Api.Utilities.UserRoles; // Для констант ролей
+using Microsoft.Extensions.Logging; // Для логирования
+using StudentPerformance.Api.Exceptions; // Для NotFoundException, ConflictException, BadRequestException
 
 namespace StudentPerformance.Api.Controllers
 {
     [ApiController]
-    [Route("api/[controller]")] // Base route: /api/users
-    [Authorize] // All actions require authentication by default
+    [Route("api/[controller]")]
+    [Authorize] // Все действия в этом контроллере требуют аутентификации по умолчанию
     public class UsersController : ControllerBase
     {
         private readonly IUserService _userService;
-        private readonly ILogger<UsersController> _logger; // Added ILogger
+        private readonly ILogger<UsersController> _logger;
 
         public UsersController(IUserService userService, ILogger<UsersController> logger)
         {
@@ -26,464 +30,379 @@ namespace StudentPerformance.Api.Controllers
             _logger = logger;
         }
 
-        /// <summary>
-        /// Helper method to safely get the current authenticated user's ID.
-        /// Throws UnauthorizedException if ID is missing/invalid.
-        /// </summary>
+        // Вспомогательный метод для получения ID текущего пользователя из claims
         private int GetCurrentUserId()
         {
             var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
-            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+            if (userIdClaim != null && int.TryParse(userIdClaim.Value, out int userId))
             {
-                _logger.LogError("Current user ID claim (NameIdentifier) is missing or invalid from token.");
-                throw new UnauthorizedException("User ID is missing from token.");
+                return userId;
             }
-            return userId;
+            _logger.LogWarning("GetCurrentUserId: User ID claim not found or invalid in token.");
+            throw new UnauthorizedAccessException("User ID claim not found or invalid in token.");
         }
 
-   
-
-        // --- Action to get a user by their ID ---
         /// <summary>
-        /// Retrieves a user's details by their ID. Accessible by administrators and the user themselves.
+        /// Gets a list of all users with optional filtering by username and user type.
+        /// Requires Administrator role and fine-grained permission.
         /// </summary>
-        [HttpGet("{userId}")]
-        [ProducesResponseType(typeof(UserDto), 200)]
-        [ProducesResponseType(401)]
-        [ProducesResponseType(403)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(500)]
-        public async Task<IActionResult> GetUserById(int userId)
+        /// <param name="username">Optional: Filter users by username.</param>
+        /// <param name="userType">Optional: Filter users by user type (role name).</param>
+        /// <returns>A list of User DTOs.</returns>
+        [HttpGet]
+        [Authorize(Roles = Administrator)] // Только администраторы могут просматривать всех пользователей
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        // ИЗМЕНЕНО: Добавлены параметры username и userType с [FromQuery]
+        public async Task<ActionResult<IEnumerable<UserDto>>> GetAllUsers([FromQuery] string? username, [FromQuery] string? userType)
         {
             try
             {
-                var currentUserId = GetCurrentUserId(); // Will throw if user ID is missing
-                var canView = await _userService.CanUserViewUserDetailsAsync(currentUserId, userId);
+                int currentUserId = GetCurrentUserId();
+                bool authorized = await _userService.CanUserViewAllUsersAsync(currentUserId);
 
-                if (!canView)
+                if (!authorized)
                 {
-                    _logger.LogWarning("User {CurrentUserId} forbidden from viewing user {TargetUserId} details.", currentUserId, userId);
-                    return Forbid("You are not authorized to view this user's details."); // Returns 403 Forbidden with default challenge
+                    _logger.LogWarning("GetAllUsers: User {UserId} is not authorized to view all users.", currentUserId);
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "У вас нет прав для просмотра всех пользователей." });
                 }
 
-                var userDto = await _userService.GetUserByIdAsync(userId);
-                if (userDto == null)
-                {
-                    _logger.LogWarning("User with ID {UserId} not found.", userId);
-                    return NotFound(new { message = $"User with ID {userId} not found." });
-                }
-                return Ok(userDto);
+                // ИЗМЕНЕНО: Передаем параметры в сервис
+                var userDtos = await _userService.GetAllUsersAsync(username, userType);
+                return Ok(userDtos);
             }
-            catch (UnauthorizedException ex)
+            catch (UnauthorizedAccessException ex)
             {
-                _logger.LogError(ex, "Unauthorized access attempt for GetUserById.");
+                _logger.LogError(ex, "Unauthorized access attempt to GetAllUsers.");
                 return Unauthorized(new { message = ex.Message });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "An error occurred while retrieving user by ID {UserId}.", userId);
-                return StatusCode(500, new { message = "An internal server error occurred." });
-            }
-        }
-
-      
-
-        // --- Action to get a list of ALL users ---
-        /// <summary>
-        /// Retrieves a list of all users. Accessible only to Administrators.
-        /// </summary>
-        [HttpGet]
-        [Authorize(Roles = "Администратор")] // Enforce role-based authorization directly
-        [ProducesResponseType(typeof(IEnumerable<UserDto>), 200)]
-        [ProducesResponseType(401)]
-        [ProducesResponseType(403)]
-        [ProducesResponseType(500)]
-        public async Task<ActionResult<IEnumerable<UserDto>>> GetAllUsers()
-        {
-            try
-            {
-                // Authorization is handled by [Authorize(Roles = "Администратор")] attribute
-                var userDtos = await _userService.GetAllUsersAsync();
-                return Ok(userDtos);
-            }
-            catch (Exception ex)
-            {
                 _logger.LogError(ex, "An error occurred while retrieving all users.");
-                return StatusCode(500, new { message = "An internal server error occurred." });
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Произошла ошибка при получении списка пользователей." });
             }
         }
 
-
-        // --- Action to get a list of users by role ---
         /// <summary>
-        /// Retrieves a list of users filtered by role name. Accessible to Administrators and Teachers.
+        /// Gets a specific user by ID.
+        /// Requires Administrator role or the user to be the owner of the profile.
         /// </summary>
-        [HttpGet("role/{roleName}")]
-        [Authorize(Roles = "Администратор,Преподаватель")]
-        [ProducesResponseType(typeof(IEnumerable<UserDto>), 200)]
-        [ProducesResponseType(401)]
-        [ProducesResponseType(403)]
-        [ProducesResponseType(500)]
-        public async Task<ActionResult<IEnumerable<UserDto>>> GetUsersByRole(string roleName)
+        /// <param name="userId">The ID of the user.</param>
+        /// <returns>The User DTO or NotFound if the user does not exist.</returns>
+        [HttpGet("{userId}")]
+        [Authorize(Roles = $"{Administrator},{Teacher},{Student}")] // Администратор, учитель, студент могут просматривать свой профиль
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        public async Task<ActionResult<UserDto>> GetUserById(int userId)
         {
             try
             {
-                var userDtos = await _userService.GetUsersByRoleAsync(roleName);
-                return Ok(userDtos);
+                int currentUserId = GetCurrentUserId();
+                bool authorized = await _userService.CanUserViewUserDetailsAsync(currentUserId, userId);
+
+                if (!authorized)
+                {
+                    _logger.LogWarning("GetUserById: User {CurrentUserId} is not authorized to view user {TargetUserId}.", currentUserId, userId);
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "У вас нет прав для просмотра деталей этого пользователя." });
+                }
+
+                var user = await _userService.GetUserByIdAsync(userId);
+                // NotFoundException теперь выбрасывается сервисом, если пользователь не найден
+                return Ok(user);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, "Unauthorized access attempt to GetUserById for user {UserId}.", userId);
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (NotFoundException ex)
+            {
+                _logger.LogWarning(ex, "GetUserById: {Message}", ex.Message);
+                return NotFound(new { message = ex.Message });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "An error occurred while retrieving users by role {RoleName}.", roleName);
-                return StatusCode(500, new { message = "An internal server error occurred." });
+                _logger.LogError(ex, "An error occurred while retrieving user {UserId}.", userId);
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = $"Произошла ошибка при получении пользователя с ID {userId}." });
             }
         }
 
-
-        // --- New Action: Register/Add a new user ---
         /// <summary>
-        /// Registers a new user account. Accessible to anyone.
+        /// Registers a new user. Available to unauthenticated users or admins creating new accounts.
         /// </summary>
+        /// <param name="request">Registration data including username, password, email, and user type.</param>
+        /// <returns>The newly created User DTO.</returns>
         [HttpPost("register")]
-        [AllowAnonymous] // Allow unauthenticated users to register
-        [ProducesResponseType(typeof(UserDto), 201)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(409)]
-        [ProducesResponseType(500)]
-        public async Task<IActionResult> Register([FromBody] RegisterRequest request)
+        [AllowAnonymous] // Разрешаем всем регистрироваться
+        [ProducesResponseType(StatusCodes.Status201Created)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)] // Для случая, когда роль не найдена
+        public async Task<ActionResult<UserDto>> Register([FromBody] RegisterRequest request)
         {
             if (!ModelState.IsValid)
             {
-                return BadRequest(ModelState); // Returns validation errors from DTO attributes
+                return BadRequest(ModelState);
             }
-
             try
             {
                 var newUser = await _userService.RegisterUserAsync(request);
-                _logger.LogInformation("New user {Username} registered successfully with ID {UserId}.", newUser.Username, newUser.Id);
-                return CreatedAtAction(nameof(GetUserById), new { userId = newUser.Id }, newUser);
+                return CreatedAtAction(nameof(GetUserById), new { userId = newUser?.UserId }, newUser);
             }
             catch (ConflictException ex)
             {
-                _logger.LogWarning(ex, "Registration failed: {Message}", ex.Message);
-                return Conflict(new { message = ex.Message }); // User with this login already exists
+                _logger.LogWarning(ex, "Registration conflict: {Message}", ex.Message);
+                return Conflict(new { message = ex.Message });
             }
-            catch (NotFoundException ex) // If role not found during registration (e.g., requested role doesn't exist)
+            catch (NotFoundException ex) // Для случая, когда роль не найдена
             {
                 _logger.LogWarning(ex, "Registration failed: {Message}", ex.Message);
-                return BadRequest(new { message = ex.Message });
-            }
-            catch (ValidationException ex)
-            {
-                _logger.LogWarning(ex, "Registration validation failed: {Message}", ex.Message);
-                return BadRequest(new { message = ex.Message });
+                return NotFound(new { message = ex.Message });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "An error occurred during user registration for {Username}.", request.Username);
-                return StatusCode(500, new { message = "An internal server error occurred." });
+                _logger.LogError(ex, "An error occurred during user registration.");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Произошла ошибка при регистрации пользователя." });
             }
         }
 
-  
-
-        // --- New Action: Update an existing user ---
         /// <summary>
-        /// Updates an existing user's details. Accessible by administrators (any user) or the user themselves.
+        /// Adds a new user by administrator.
         /// </summary>
+        /// <param name="request">Add user data including username, password, email, user type, first name, last name, and optional group ID.</param>
+        /// <returns>The newly created User DTO.</returns>
+        [HttpPost] // Использование того же роута, но с авторизацией
+        [Authorize(Roles = Administrator)] // Только администраторы могут добавлять пользователей через этот эндпоинт
+        [ProducesResponseType(StatusCodes.Status201Created)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<ActionResult<UserDto>> AddUser([FromBody] RegisterRequest request) // Используем RegisterRequest, так как он содержит все необходимые поля
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+            try
+            {
+                int currentUserId = GetCurrentUserId();
+                // Проверка, что текущий пользователь может добавлять пользователей (т.е. он админ)
+                bool authorized = await _userService.CanUserManageUsersAsync(currentUserId);
+                if (!authorized)
+                {
+                    _logger.LogWarning("AddUser: User {UserId} is not authorized to add users.", currentUserId);
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "У вас нет прав для добавления пользователей." });
+                }
+
+                var newUser = await _userService.RegisterUserAsync(request); // Переиспользуем логику регистрации
+                return CreatedAtAction(nameof(GetUserById), new { userId = newUser?.UserId }, newUser);
+            }
+            catch (ConflictException ex)
+            {
+                _logger.LogWarning(ex, "AddUser conflict: {Message}", ex.Message);
+                return Conflict(new { message = ex.Message });
+            }
+            catch (NotFoundException ex)
+            {
+                _logger.LogWarning(ex, "AddUser failed: {Message}", ex.Message);
+                return NotFound(new { message = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, "Unauthorized access attempt to AddUser.");
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred during adding a user by admin.");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Произошла ошибка при добавлении пользователя." });
+            }
+        }
+
+
+        /// <summary>
+        /// Updates an existing user.
+        /// Requires Administrator role or the user to be the owner of the profile.
+        /// </summary>
+        /// <param name="userId">The ID of the user to update.</param>
+        /// <param name="request">The updated data for the user.</param>
+        /// <returns>NoContent if successful, NotFound if the user doesn't exist, or BadRequest for invalid data.</returns>
         [HttpPut("{userId}")]
-        [ProducesResponseType(204)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(401)]
-        [ProducesResponseType(403)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(409)]
-        [ProducesResponseType(500)]
+        [Authorize(Roles = Administrator)] // Только администраторы могут обновлять других пользователей
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)]
         public async Task<IActionResult> UpdateUser(int userId, [FromBody] UpdateUserRequest request)
         {
             if (!ModelState.IsValid)
             {
                 return BadRequest(ModelState);
             }
-
             try
             {
-                var currentUserId = GetCurrentUserId();
-                var canUpdate = await _userService.CanUserUpdateUserAsync(currentUserId, userId);
-                if (!canUpdate)
+                int currentUserId = GetCurrentUserId();
+                bool authorized = await _userService.CanUserUpdateUserAsync(currentUserId, userId);
+
+                if (!authorized)
                 {
-                    _logger.LogWarning("User {CurrentUserId} forbidden from updating user {TargetUserId}.", currentUserId, userId);
-                    return Forbid("You are not authorized to update this user's profile."); // Returns 403 Forbidden with default challenge
+                    _logger.LogWarning("UpdateUser: User {CurrentUserId} is not authorized to update user {TargetUserId}.", currentUserId, userId);
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "У вас нет прав для обновления этого пользователя." });
                 }
 
-                var success = await _userService.UpdateUserAsync(userId, request);
-                if (!success)
+                bool isUpdated = await _userService.UpdateUserAsync(userId, request);
+                if (!isUpdated)
                 {
-                    // This case should ideally be covered by NotFoundException from service.
-                    // But if service returns false without throwing, this handles it.
-                    _logger.LogWarning("Update for user {UserId} failed (user not found or no changes).", userId);
-                    return NotFound(new { message = "User not found or no changes were made." });
+                    // Если сервис возвращает false, но не выбрасывает NotFoundException, это может быть 
+                    // логическая ошибка или отсутствие изменений.
+                    return BadRequest("Failed to update user. Check for data conflicts or invalid data.");
                 }
-                _logger.LogInformation("User {UserId} updated successfully.", userId);
-                return NoContent(); // 204 No Content for successful update
-            }
-            catch (UnauthorizedException ex)
-            {
-                _logger.LogError(ex, "Unauthorized attempt to update user.");
-                return Unauthorized(new { message = ex.Message });
-            }
-            catch (ForbiddenException ex)
-            {
-                _logger.LogWarning(ex, "Forbidden attempt: {Message}", ex.Message);
-                return StatusCode(403, new { message = ex.Message }); // Corrected: Return 403 with message
+                _logger.LogInformation("User {UserId} updated successfully by user {CurrentUserId}.", userId, currentUserId);
+                return NoContent();
             }
             catch (NotFoundException ex)
             {
-                _logger.LogWarning(ex, "Update user failed: {Message}", ex.Message);
+                _logger.LogWarning(ex, "UpdateUser: {Message}", ex.Message);
                 return NotFound(new { message = ex.Message });
             }
             catch (ConflictException ex)
             {
-                _logger.LogWarning(ex, "Update user failed: {Message}", ex.Message);
+                _logger.LogWarning(ex, "UpdateUser conflict: {Message}", ex.Message);
                 return Conflict(new { message = ex.Message });
             }
-            catch (ValidationException ex)
+            catch (BadRequestException ex) // Для ошибок вроде неверного текущего пароля
             {
-                _logger.LogWarning(ex, "Update user validation failed: {Message}", ex.Message);
+                _logger.LogWarning(ex, "UpdateUser bad request: {Message}", ex.Message);
                 return BadRequest(new { message = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, "Unauthorized access attempt to UpdateUser for user {UserId}.", userId);
+                return Unauthorized(new { message = ex.Message });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "An error occurred while updating user {UserId}.", userId);
-                return StatusCode(500, new { message = "An internal server error occurred." });
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = $"Произошла ошибка при обновлении пользователя с ID {userId}." });
             }
         }
 
-     
-
-        // --- New Action: Change User Password ---
         /// <summary>
-        /// Changes a user's password. Accessible by administrators (any user) or the user themselves.
+        /// Changes the password for the current authenticated user.
         /// </summary>
-        [HttpPut("{userId}/change-password")]
-        [ProducesResponseType(204)]
-        [ProducesResponseType(400)]
-        [ProducesResponseType(401)]
-        [ProducesResponseType(403)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(500)]
-        public async Task<IActionResult> ChangePassword(int userId, [FromBody] ChangePasswordRequest request)
+        /// <param name="request">Request containing current and new passwords.</param>
+        /// <returns>NoContent if successful.</returns>
+        [HttpPut("change-password")]
+        [Authorize] // Любой аутентифицированный пользователь может сменить свой пароль
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)] // Если пользователь не найден (хотя должен быть авторизован)
+        public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
         {
             if (!ModelState.IsValid)
             {
                 return BadRequest(ModelState);
             }
-
             try
             {
-                var currentUserId = GetCurrentUserId();
-                // Direct authorization check as per your original code.
-                // The service method should contain the core logic for security and actual password verification.
-                if (currentUserId != userId && !User.IsInRole("Администратор"))
+                int currentUserId = GetCurrentUserId();
+                bool isChanged = await _userService.ChangePasswordAsync(currentUserId, request);
+                if (!isChanged)
                 {
-                    _logger.LogWarning("User {CurrentUserId} forbidden from changing password for user {TargetUserId}.", currentUserId, userId);
-                    return Forbid("You are not authorized to change this user's password.");
+                    // Этот случай должен быть перехвачен сервисом как NotFoundException или BadRequestException
+                    return BadRequest("Failed to change password.");
                 }
-
-                // The service method should handle password match, old password verification etc.
-                var success = await _userService.ChangePasswordAsync(userId, request);
-                if (!success)
-                {
-                    // This means the service returned false without throwing a specific exception.
-                    // The service method should ideally throw specific exceptions for clarity (e.g., InvalidCredentialsException, NotFoundException).
-                    _logger.LogWarning("Password change for user {UserId} failed for an unspecified reason.", userId);
-                    return BadRequest(new { message = "Password change failed. Please check your current password." });
-                }
-                _logger.LogInformation("Password successfully changed for user {UserId}.", userId);
+                _logger.LogInformation("Password changed successfully for user {CurrentUserId}.", currentUserId);
                 return NoContent();
-            }
-            catch (UnauthorizedException ex)
-            {
-                _logger.LogError(ex, "Unauthorized attempt to change password.");
-                return Unauthorized(new { message = ex.Message });
-            }
-            catch (ForbiddenException ex)
-            {
-                _logger.LogWarning(ex, "Forbidden attempt: {Message}", ex.Message);
-                return StatusCode(403, new { message = ex.Message }); // Corrected: Return 403 with message
             }
             catch (NotFoundException ex)
             {
-                _logger.LogWarning(ex, "Change password failed: {Message}", ex.Message);
+                _logger.LogWarning(ex, "ChangePassword: {Message}", ex.Message);
                 return NotFound(new { message = ex.Message });
             }
-            catch (ValidationException ex)
+            catch (BadRequestException ex) // Для неверного текущего пароля
             {
-                _logger.LogWarning(ex, "Change password validation failed: {Message}", ex.Message);
+                _logger.LogWarning(ex, "ChangePassword bad request: {Message}", ex.Message);
                 return BadRequest(new { message = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, "Unauthorized access attempt to ChangePassword.");
+                return Unauthorized(new { message = ex.Message });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "An error occurred while changing password for user {UserId}.", userId);
-                return StatusCode(500, new { message = "An internal server error occurred." });
+                _logger.LogError(ex, "An error occurred while changing password.");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "Произошла ошибка при смене пароля." });
             }
         }
 
-   
 
-        // --- New Action: Delete a user ---
         /// <summary>
-        /// Deletes a user account. Accessible only to Administrators.
+        /// Deletes a user.
+        /// Requires Administrator role and fine-grained permission (cannot delete self if sole admin).
         /// </summary>
+        /// <param name="userId">The ID of the user to delete.</param>
+        /// <returns>NoContent if successful, NotFound if the user does not exist, or Conflict if dependencies exist.</returns>
         [HttpDelete("{userId}")]
-        [Authorize(Roles = "Администратор")] // Enforce role-based authorization directly
-        [ProducesResponseType(204)]
-        [ProducesResponseType(401)]
-        [ProducesResponseType(403)]
-        [ProducesResponseType(404)]
-        [ProducesResponseType(409)]
-        [ProducesResponseType(500)]
+        [Authorize(Roles = Administrator)] // Только администраторы могут удалять пользователей
+        [ProducesResponseType(StatusCodes.Status204NoContent)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)]
         public async Task<IActionResult> DeleteUser(int userId)
         {
             try
             {
-                var currentUserId = GetCurrentUserId();
-                // Additional service-level authorization for finer control if needed,
-                // e.g., to prevent an admin from deleting themselves.
-                if (!await _userService.CanUserDeleteUserAsync(currentUserId, userId))
+                int currentUserId = GetCurrentUserId();
+                bool authorized = await _userService.CanUserDeleteUserAsync(currentUserId, userId);
+
+                if (!authorized)
                 {
-                    _logger.LogWarning("User {CurrentUserId} forbidden from deleting user {TargetUserId}.", currentUserId, userId);
-                    return Forbid("You are not authorized to delete this user.");
+                    _logger.LogWarning("DeleteUser: User {CurrentUserId} is not authorized to delete user {TargetUserId}.", currentUserId, userId);
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "У вас нет прав для удаления этого пользователя." });
                 }
 
-                var success = await _userService.DeleteUserAsync(userId);
-                if (!success)
+                // Дополнительная проверка на фронтенде/сервисе, чтобы не удалить себя, если админ
+                if (currentUserId == userId)
                 {
-                    _logger.LogWarning("Delete operation for user {UserId} failed (user not found or dependencies exist).", userId);
-                    return NotFound(new { message = "User not found or could not be deleted (e.g., has dependencies)." });
+                    _logger.LogWarning("DeleteUser: User {CurrentUserId} attempted to delete their own account.", currentUserId);
+                    return BadRequest(new { message = "Вы не можете удалить свою собственную учетную запись администратора через этот эндпоинт." });
                 }
-                _logger.LogInformation("User {UserId} deleted successfully.", userId);
-                return NoContent(); // 204 No Content for successful deletion
-            }
-            catch (UnauthorizedException ex)
-            {
-                _logger.LogError(ex, "Unauthorized attempt to delete user.");
-                return Unauthorized(new { message = ex.Message });
-            }
-            catch (ForbiddenException ex)
-            {
-                _logger.LogWarning(ex, "Forbidden attempt: {Message}", ex.Message);
-                return StatusCode(403, new { message = ex.Message }); // Corrected: Return 403 with message
+
+                await _userService.DeleteUserAsync(userId); // Сервис сам выбрасывает исключения
+                _logger.LogInformation("User {UserId} deleted successfully by user {CurrentUserId}.", userId, currentUserId);
+                return NoContent();
             }
             catch (NotFoundException ex)
             {
-                _logger.LogWarning(ex, "Delete user failed: {Message}", ex.Message);
+                _logger.LogWarning(ex, "DeleteUser: {Message}", ex.Message);
                 return NotFound(new { message = ex.Message });
             }
-            catch (ConflictException ex) // If there are related entities preventing deletion
+            catch (ConflictException ex)
             {
-                _logger.LogWarning(ex, "Delete user failed due to conflict: {Message}", ex.Message);
+                _logger.LogWarning(ex, "DeleteUser conflict: {Message}", ex.Message);
                 return Conflict(new { message = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogError(ex, "Unauthorized access attempt to DeleteUser for user {UserId}.", userId);
+                return Unauthorized(new { message = ex.Message });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "An error occurred while deleting user {UserId}.", userId);
-                return StatusCode(500, new { message = "An internal server error occurred." });
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = $"Произошла ошибка при удалении пользователя с ID {userId}." });
             }
         }
-
-
-
-        // --- Authentication Action (Login) ---
-        /// <summary>
-        /// Authenticates a user and returns authentication details (e.g., JWT token).
-        /// </summary>
-        [HttpPost("login")]
-        [AllowAnonymous] // Login does not require prior authentication
-        [ProducesResponseType(typeof(AuthenticationResult), 200)] // Assuming AuthResponseDto contains token and user info
-        [ProducesResponseType(400)]
-        [ProducesResponseType(401)]
-        [ProducesResponseType(500)]
-        public async Task<IActionResult> Login([FromBody] LoginRequest request)
-        {
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(ModelState);
-            }
-
-            try
-            {
-                var authResult = await _userService.AuthenticateUserAsync(request.Login, request.Password);
-                if (authResult == null)
-                {
-                    _logger.LogWarning("Authentication failed for user {Login}: Invalid credentials.", request.Login);
-                    return Unauthorized(new { message = "Invalid login credentials." }); // Return 401 Unauthorized for invalid credentials
-                }
-                _logger.LogInformation("User {Login} authenticated successfully.", request.Login);
-                return Ok(authResult); // Return 200 OK with the authentication result
-            }
-            catch (ValidationException ex)
-            {
-                _logger.LogWarning(ex, "Login validation failed: {Message}", ex.Message);
-                return BadRequest(new { message = ex.Message });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "An error occurred during login for user {Login}.", request.Login);
-                return StatusCode(500, new { message = "An internal server error occurred." });
-            }
-        }
-
-        /*
-         * The GetUserWithRoleById was commented out because GetUserByIdAsync from UserService
-         * already fetches UserDto which should include RoleName if your DTO mapping is set up correctly.
-         * If your UserDto doesn't include RoleName and you specifically need it, you'd add:
-         *
-         /// <summary>
-         /// Retrieves user details including their role. Use if GetUserById doesn't provide role name.
-         /// </summary>
-         [HttpGet("{userId}/with-role")]
-         [ProducesResponseType(typeof(UserDto), 200)]
-         [ProducesResponseType(401)]
-         [ProducesResponseType(403)]
-         [ProducesResponseType(404)]
-         [ProducesResponseType(500)]
-         public async Task<IActionResult> GetUserWithRoleById(int userId)
-         {
-             try
-             {
-                 var currentUserId = GetCurrentUserId();
-                 // Example simplified authorization for this specific endpoint: Admin or self
-                 if (currentUserId != userId && !User.IsInRole("Администратор"))
-                 {
-                     _logger.LogWarning("User {CurrentUserId} forbidden from viewing user {TargetUserId} with role details.", currentUserId, userId);
-                     return Forbid("You are not authorized to view this user's details with role.");
-                 }
-
-                 var userDto = await _userService.GetUserByIdAsync(userId); // Assuming this DTO contains RoleName
-
-                 if (userDto == null)
-                 {
-                     _logger.LogWarning("User with ID {UserId} not found for GetUserWithRoleById.", userId);
-                     return NotFound(new { message = $"User with ID {userId} not found." });
-                 }
-
-                 // If RoleName isn't automatically populated by AutoMapper in UserDto when calling GetUserByIdAsync,
-                 // you would need a method in your service to explicitly fetch it, or adjust your AutoMapper profile.
-                 // Example: userDto.RoleName = await _userService.GetUserRoleAsync(userId);
-
-                 return Ok(userDto);
-             }
-             catch (UnauthorizedException ex)
-             {
-                 _logger.LogError(ex, "Unauthorized access attempt for GetUserWithRoleById.");
-                 return Unauthorized(new { message = ex.Message });
-             }
-             catch (Exception ex)
-             {
-                 _logger.LogError(ex, "An error occurred while retrieving user with role by ID {UserId}.", userId);
-                 return StatusCode(500, new { message = "An internal server error occurred." });
-             }
-         }
-         */
     }
 }

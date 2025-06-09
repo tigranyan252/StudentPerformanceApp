@@ -1,31 +1,37 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using StudentPerformance.Api.Services; // For IUserService and IAssignmentService
-using StudentPerformance.Api.Models.DTOs;
+﻿// Path: StudentPerformance.Api/Controllers/AssignmentsController.cs
+
+using Microsoft.AspNetCore.Mvc;
+using StudentPerformance.Api.Services.Interfaces; // Для нового IAssignmentService
+using StudentPerformance.Api.Models.DTOs; // Для AssignmentDto
+using StudentPerformance.Api.Models.Requests; // Для запросов Add/Update
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Authorization;
-using System.Security.Claims; // For ClaimsPrincipal and Claims
-using System; // For UnauthorizedAccessException, InvalidOperationException
-using Microsoft.AspNetCore.Http; // For StatusCodes
+using Microsoft.AspNetCore.Http; // Для StatusCodes
+using System; // Для исключений
+using System.Security.Claims; // Для GetCurrentUserId
+using static StudentPerformance.Api.Utilities.UserRoles; // Для констант ролей
 
 namespace StudentPerformance.Api.Controllers
 {
     [ApiController]
-    [Route("api/[controller]")]
-    [Authorize] // Apply authorization globally to the controller
+    [Route("api/[controller]")] // МАРШРУТ БУДЕТ /api/Assignments
+    [Authorize] // Защищаем контроллер
     public class AssignmentsController : ControllerBase
     {
-        private readonly IUserService _userService; // Injected as interface
-        private readonly IAssignmentService _assignmentService; // New dedicated service
+        private readonly IAssignmentService _assignmentService; // НОВЫЙ сервис для общих заданий
+        private readonly IUserService _userService; // Для авторизации
+        private readonly ILogger<AssignmentsController> _logger;
 
-        public AssignmentsController(IUserService userService, IAssignmentService assignmentService)
+        public AssignmentsController(IAssignmentService assignmentService, IUserService userService, ILogger<AssignmentsController> logger)
         {
-            _userService = userService;
             _assignmentService = assignmentService;
+            _userService = userService;
+            _logger = logger;
         }
 
-        // Helper to get the user ID from claims
-        // Consider this helper in a base controller or extension method if used frequently.
+        // Вспомогательный метод для получения ID текущего пользователя
         private int GetCurrentUserId()
         {
             var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
@@ -33,156 +39,246 @@ namespace StudentPerformance.Api.Controllers
             {
                 return userId;
             }
-            // If the user ID is not found, it means the token is invalid or corrupted.
-            // This situation ideally should be caught by authentication middleware first.
-            // Throwing InvalidOperationException is appropriate for an unexpected state.
-            throw new InvalidOperationException("User ID claim not found or invalid in token.");
+            throw new UnauthorizedAccessException("User ID claim not found or invalid in token.");
         }
 
         /// <summary>
-        /// Adds a new teacher-subject-group assignment.
-        /// Requires Administrator role.
+        /// Получает список всех общих заданий (Homework, Projects).
+        /// Доступно Администраторам и Преподавателям.
         /// </summary>
-        /// <param name="request">The assignment data.</param>
-        /// <returns>A DTO of the newly created assignment or BadRequest if invalid.</returns>
-        [HttpPost]
-        [Authorize(Roles = "Администратор")] // Explicitly define role for clarity and direct authorization
-        [ProducesResponseType(StatusCodes.Status201Created)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        [ProducesResponseType(StatusCodes.Status403Forbidden)] // 403 will be returned by [Authorize] if role doesn't match
-        public async Task<IActionResult> AddAssignment([FromBody] AddTeacherSubjectGroupAssignmentRequest request)
+        /// <returns>Список AssignmentDto.</returns>
+        [HttpGet] // Отвечает на GET /api/Assignments
+        [Authorize(Roles = $"{Administrator},{Teacher}")] // Разрешаем доступ Admin и Teacher
+        [ProducesResponseType(typeof(IEnumerable<AssignmentDto>), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<ActionResult<IEnumerable<AssignmentDto>>> GetAllAssignments()
         {
-            // We can remove the _userService.CanUserAddAssignmentAsync check here
-            // if [Authorize(Roles = "Administrator")] is sufficient, as it handles the 403.
-            // If you have more complex logic than just role, keep a service check.
-            // For this example, let's rely on [Authorize] attribute.
-
-            var assignmentDto = await _assignmentService.AddAssignmentAsync(request);
-
-            if (assignmentDto == null)
+            _logger.LogInformation("Attempting to get all general assignments.");
+            try
             {
-                // This could mean a duplicate assignment or invalid foreign keys (teacher, subject, group, semester not found).
-                // Returning BadRequest with a specific message is good.
-                return BadRequest("Failed to add assignment. It might already exist or related entities are invalid.");
-            }
+                var currentUserId = GetCurrentUserId();
+                var currentUserRole = await _userService.GetUserRoleAsync(currentUserId);
 
-            return CreatedAtAction(
-                nameof(GetAssignmentById), // Name of the GET method to retrieve the created resource
-                new { assignmentId = assignmentDto.TeacherSubjectGroupAssignmentId }, // Route values for the GET method
-                assignmentDto // The created resource itself
-            );
+                // Здесь можно добавить более тонкую логику авторизации,
+                // например, учитель видит только задания по своим курсам.
+                // Но для простоты пока разрешаем всем учителям и админам видеть все задания.
+                if (currentUserRole != Administrator && currentUserRole != Teacher)
+                {
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "You are not authorized to view general assignments." });
+                }
+
+                var assignments = await _assignmentService.GetAllAssignmentsAsync();
+                return Ok(assignments);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogWarning(ex, "Unauthorized attempt to get all general assignments.");
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while retrieving all general assignments.");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "An internal server error occurred." });
+            }
         }
 
         /// <summary>
-        /// Gets a specific assignment by its ID.
-        /// Requires Administrator or Teacher (if assigned) roles.
+        /// Получает общее задание по ID.
+        /// Доступно Администраторам и Преподавателям (если имеют права).
         /// </summary>
-        /// <param name="assignmentId">The ID of the assignment.</param>
-        /// <returns>The assignment DTO or NotFound.</returns>
+        /// <param name="assignmentId">ID задания.</param>
+        /// <returns>AssignmentDto или NotFound.</returns>
         [HttpGet("{assignmentId}")]
-        // More complex authorization logic needed here, potentially combining roles and ownership
-        [ProducesResponseType(StatusCodes.Status200OK)]
+        [Authorize(Roles = $"{Administrator},{Teacher}")]
+        [ProducesResponseType(typeof(AssignmentDto), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        public async Task<IActionResult> GetAssignmentById(int assignmentId)
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<ActionResult<AssignmentDto>> GetAssignmentById(int assignmentId)
         {
-            var currentUserId = GetCurrentUserId(); // Get user ID from token
-
-            // This check needs to be more complex if a Teacher can only see their own assignments
-            // It might look like: await _userService.IsUserAdmin(currentUserId) || await _userService.IsUserAssignedToAssignment(currentUserId, assignmentId)
-            // Assuming CanUserViewAssignmentDetailsAsync covers this complex logic.
-            if (!await _userService.CanUserViewAssignmentDetailsAsync(currentUserId, assignmentId))
+            _logger.LogInformation("Attempting to get general assignment with ID: {AssignmentId}", assignmentId);
+            try
             {
-                return Forbid(); // 403 Forbidden - User lacks permission
+                var currentUserId = GetCurrentUserId();
+                var currentUserRole = await _userService.GetUserRoleAsync(currentUserId);
+
+                // Можно добавить проверку _userService.CanUserViewAssignmentDetailsAsync(currentUserId, assignmentId);
+                // если нужны более тонкие права доступа, например, учитель может видеть только свои задания.
+
+                var assignmentDto = await _assignmentService.GetAssignmentByIdAsync(assignmentId);
+
+                if (assignmentDto == null)
+                {
+                    _logger.LogWarning("General assignment with ID {AssignmentId} not found.", assignmentId);
+                    return NotFound($"General assignment with ID {assignmentId} not found.");
+                }
+
+                return Ok(assignmentDto);
             }
-
-            var assignmentDto = await _assignmentService.GetAssignmentByIdAsync(assignmentId);
-
-            if (assignmentDto == null)
+            catch (UnauthorizedAccessException ex)
             {
-                return NotFound(); // 404 Not Found - Assignment does not exist
+                _logger.LogWarning(ex, "Unauthorized attempt to get general assignment {AssignmentId}.", assignmentId);
+                return Unauthorized(new { message = ex.Message });
             }
-
-            return Ok(assignmentDto); // 200 OK
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while retrieving general assignment {AssignmentId}.", assignmentId);
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "An internal server error occurred." });
+            }
         }
 
         /// <summary>
-        /// Gets all teacher-subject-group assignments.
-        /// Requires Administrator or Teacher roles.
+        /// Добавляет новое общее задание.
+        /// Доступно Администраторам.
         /// </summary>
-        /// <returns>A list of assignment DTOs.</returns>
-        [HttpGet]
-        [Authorize(Roles = "Администратор,Преподаватель")] // Users with either role can view all
-        [ProducesResponseType(StatusCodes.Status200OK)]
+        /// <param name="request">Данные нового задания.</param>
+        /// <returns>Созданный AssignmentDto.</returns>
+        [HttpPost]
+        [Authorize(Roles = Administrator)]
+        [ProducesResponseType(typeof(AssignmentDto), StatusCodes.Status201Created)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        public async Task<IActionResult> GetAllAssignments()
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> AddAssignment([FromBody] AddAssignmentRequest request)
         {
-            // You might add a check here if Teachers should only see *their own* assignments
-            // If so, you'd filter the list based on currentUserId.
-            // For now, assuming "view all" means all if they have the role.
-            // If an Admin sees all and a Teacher sees only theirs, this needs branching logic.
+            if (!ModelState.IsValid)
+            {
+                _logger.LogWarning("Add assignment failed: Invalid model state.");
+                return BadRequest(ModelState);
+            }
 
-            var assignments = await _assignmentService.GetAllAssignmentsAsync();
-            return Ok(assignments);
+            _logger.LogInformation("Attempting to add new general assignment: {Title}", request.Title);
+            try
+            {
+                var currentUserId = GetCurrentUserId();
+                // Можно добавить проверку _userService.CanUserAddAssignmentAsync(currentUserId);
+                // если нужны более тонкие права доступа.
+
+                var newAssignment = await _assignmentService.AddAssignmentAsync(request);
+                return CreatedAtAction(nameof(GetAssignmentById), new { assignmentId = newAssignment!.AssignmentId }, newAssignment);
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning(ex, "Add assignment failed: {Message}", ex.Message);
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogWarning(ex, "Unauthorized attempt to add general assignment.");
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while adding new general assignment.");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "An internal server error occurred." });
+            }
         }
 
         /// <summary>
-        /// Updates an existing teacher-subject-group assignment.
-        /// Requires Administrator role.
+        /// Обновляет существующее общее задание.
+        /// Доступно Администраторам.
         /// </summary>
-        /// <param name="assignmentId">The ID of the assignment to update.</param>
-        /// <param name="request">The updated data for the assignment.</param>
-        /// <returns>NoContent if successful, NotFound or BadRequest otherwise.</returns>
+        /// <param name="assignmentId">ID задания для обновления.</param>
+        /// <param name="request">Данные для обновления.</param>
+        /// <returns>NoContent или NotFound/BadRequest.</returns>
         [HttpPut("{assignmentId}")]
-        [Authorize(Roles = "Администратор")] // Only administrators can update
+        [Authorize(Roles = Administrator)]
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        public async Task<IActionResult> UpdateAssignment(int assignmentId, [FromBody] UpdateTeacherSubjectGroupAssignmentRequest request)
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> UpdateAssignment(int assignmentId, [FromBody] UpdateAssignmentRequest request)
         {
-            // Similar to Add, rely on [Authorize] for simple role checks.
-            // If complex permission check needed, keep _userService.CanUserUpdateAssignmentAsync
-            // var currentUserId = GetCurrentUserId();
-            // if (!await _userService.CanUserUpdateAssignmentAsync(currentUserId, assignmentId)) { return Forbid(); }
-
-            var isUpdated = await _assignmentService.UpdateAssignmentAsync(assignmentId, request);
-
-            if (isUpdated)
+            if (!ModelState.IsValid)
             {
-                return NoContent(); // 204 No Content for successful update
+                _logger.LogWarning("Update assignment {AssignmentId} failed: Invalid model state.", assignmentId);
+                return BadRequest(ModelState);
             }
 
-            // If not updated, it could be not found or a business logic error (e.g., duplicate).
-            // A more specific error message or returning a detailed object could be better.
-            return NotFound("Assignment not found or update failed due to data conflict (e.g., duplicate assignment after changes).");
+            _logger.LogInformation("Attempting to update general assignment with ID: {AssignmentId}", assignmentId);
+            try
+            {
+                var currentUserId = GetCurrentUserId();
+                // Можно добавить проверку _userService.CanUserUpdateAssignmentAsync(currentUserId, assignmentId);
+                // если нужны более тонкие права доступа.
+
+                var isUpdated = await _assignmentService.UpdateAssignmentAsync(assignmentId, request);
+                if (!isUpdated)
+                {
+                    _logger.LogWarning("Update for general assignment {AssignmentId} failed: not found or no changes.", assignmentId);
+                    return NotFound($"General assignment with ID {assignmentId} not found or no changes were made.");
+                }
+                return NoContent();
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning(ex, "Update assignment {AssignmentId} failed: {Message}", assignmentId, ex.Message);
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogWarning(ex, "Unauthorized attempt to update general assignment {AssignmentId}.", assignmentId);
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while updating general assignment {AssignmentId}.", assignmentId);
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "An internal server error occurred." });
+            }
         }
 
         /// <summary>
-        /// Deletes a teacher-subject-group assignment.
-        /// Requires Administrator role.
+        /// Удаляет общее задание.
+        /// Доступно Администраторам.
         /// </summary>
-        /// <param name="assignmentId">The ID of the assignment to delete.</param>
-        /// <returns>NoContent if successful, NotFound otherwise.</returns>
+        /// <param name="assignmentId">ID задания для удаления.</param>
+        /// <returns>NoContent или NotFound/Conflict.</returns>
         [HttpDelete("{assignmentId}")]
-        [Authorize(Roles = "Администратор")] // Only administrators can delete
+        [Authorize(Roles = Administrator)]
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)] // Для внешних ключей
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> DeleteAssignment(int assignmentId)
         {
-            // Similar to Add/Update, rely on [Authorize] for simple role checks.
-            // var currentUserId = GetCurrentUserId();
-            // if (!await _userService.CanUserDeleteAssignmentAsync(currentUserId, assignmentId)) { return Forbid(); }
-
-            var isDeleted = await _assignmentService.DeleteAssignmentAsync(assignmentId);
-
-            if (isDeleted)
+            _logger.LogInformation("Attempting to delete general assignment with ID: {AssignmentId}", assignmentId);
+            try
             {
-                return NoContent(); // 204 No Content for successful deletion
-            }
+                var currentUserId = GetCurrentUserId();
+                // Можно добавить проверку _userService.CanUserDeleteAssignmentAsync(currentUserId, assignmentId);
+                // если нужны более тонкие права доступа.
 
-            return NotFound(); // 404 Not Found if assignment doesn't exist or could not be deleted
+                var isDeleted = await _assignmentService.DeleteAssignmentAsync(assignmentId);
+                if (!isDeleted)
+                {
+                    _logger.LogWarning("Delete for general assignment {AssignmentId} failed: not found.", assignmentId);
+                    return NotFound($"General assignment with ID {assignmentId} not found.");
+                }
+                return NoContent();
+            }
+            catch (InvalidOperationException ex) // От сервиса, если есть зависимости (Restrict)
+            {
+                _logger.LogWarning(ex, "Delete for general assignment {AssignmentId} failed due to dependencies.", assignmentId);
+                return Conflict(new { message = ex.Message });
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger.LogWarning(ex, "Unauthorized attempt to delete general assignment {AssignmentId}.", assignmentId);
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "An error occurred while deleting general assignment {AssignmentId}.", assignmentId);
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "An internal server error occurred." });
+            }
         }
     }
 }

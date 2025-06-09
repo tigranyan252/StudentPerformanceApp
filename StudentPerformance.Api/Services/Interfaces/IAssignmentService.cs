@@ -1,25 +1,20 @@
-﻿// Path: StudentPerformance.Api/Services/IAssignmentService.cs
+﻿// Path: StudentPerformance.Api/Services/Interfaces/IAssignmentService.cs
 
+using StudentPerformance.Api.Models.DTOs;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using StudentPerformance.Api.Models.DTOs; // For Assignment DTOs and Requests
-// Add other usings if needed, e.g., for entity models if you use them directly in service signatures
+using StudentPerformance.Api.Models.Requests; // Если понадобятся запросы для Add/Update
 
-namespace StudentPerformance.Api.Services
+namespace StudentPerformance.Api.Services.Interfaces
 {
+    // НОВОЕ: Интерфейс для работы с общими заданиями (Homework, Projects)
     public interface IAssignmentService
     {
-        // CRUD operations for assignments
-        Task<TeacherSubjectGroupAssignmentDto?> AddAssignmentAsync(AddTeacherSubjectGroupAssignmentRequest request);
-        Task<TeacherSubjectGroupAssignmentDto?> GetAssignmentByIdAsync(int assignmentId);
-        Task<IEnumerable<TeacherSubjectGroupAssignmentDto>> GetAllAssignmentsAsync();
-        Task<bool> UpdateAssignmentAsync(int assignmentId, UpdateTeacherSubjectGroupAssignmentRequest request);
+        Task<IEnumerable<AssignmentDto>> GetAllAssignmentsAsync(); // Возвращает общие задания
+        Task<AssignmentDto?> GetAssignmentByIdAsync(int assignmentId);
+        // Добавьте другие методы, если нужны: Add, Update, Delete
+        Task<AssignmentDto?> AddAssignmentAsync(AddAssignmentRequest request);
+        Task<bool> UpdateAssignmentAsync(int assignmentId, UpdateAssignmentRequest request);
         Task<bool> DeleteAssignmentAsync(int assignmentId);
-
-        // Permission checks specific to assignments (if not handled purely by roles/claims)
-        // You can decide if these belong here or solely in UserService based on complexity.
-        // For now, let's keep them in UserService if they involve user roles,
-        // but if they involve checking assignment ownership/relations, they could be here.
-        // For simplicity, let's assume UserService handles general user role checks.
     }
 }

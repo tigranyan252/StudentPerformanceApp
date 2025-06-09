@@ -1,25 +1,27 @@
-﻿// Path: Controllers/RolesController.cs
+﻿// Path: StudentPerformance.Api/Controllers/RolesController.cs
 
 using Microsoft.AspNetCore.Mvc;
-using StudentPerformance.Api.Models.DTOs; // <--- Corrected DTO namespace
-using StudentPerformance.Api.Services; // For IRoleService and IUserService
+using StudentPerformance.Api.Models.DTOs;
 using Microsoft.AspNetCore.Authorization;
-using System.Security.Claims; // For ClaimTypes
+using System.Security.Claims;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http; // For StatusCodes
+using Microsoft.AspNetCore.Http;
 using System;
-using StudentPerformance.Api.Services.Interfaces; // For InvalidOperationException
+using StudentPerformance.Api.Services.Interfaces; // For IRoleService and IUserService
+using StudentPerformance.Api.Exceptions; // For custom exceptions
+using static StudentPerformance.Api.Utilities.UserRoles;
+using StudentPerformance.Api.Services; // Для прямого доступа к константам ролей
 
 namespace StudentPerformance.Api.Controllers
 {
-    [Route("api/[controller]")] // Sets the base route, e.g., /api/roles
-    [ApiController] // Indicates this is an API controller
+    [Route("api/[controller]")]
+    [ApiController]
     [Authorize] // All actions in this controller require authentication by default
     public class RolesController : ControllerBase
     {
         private readonly IRoleService _roleService;
-        private readonly IUserService _userService; // Inject IUserService for shared auth logic
+        private readonly IUserService _userService;
 
         public RolesController(IRoleService roleService, IUserService userService)
         {
@@ -35,65 +37,93 @@ namespace StudentPerformance.Api.Controllers
             {
                 return userId;
             }
-            throw new InvalidOperationException("User ID claim not found or invalid in token.");
+            throw new UnauthorizedAccessException("User ID claim not found or invalid in token.");
         }
 
         /// <summary>
         /// Gets a list of all roles.
-        /// Requires Administrator, Teacher, or Student roles, and fine-grained permission.
+        /// Requires Administrator role for full access.
         /// </summary>
         /// <returns>A list of Role DTOs.</returns>
         [HttpGet]
-        [Authorize(Roles = "Администратор,Преподаватель,Студент")] // Example: All authenticated users can view roles
+        [Authorize(Roles = Administrator)] // Только администратор может просматривать все роли
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public async Task<ActionResult<IEnumerable<RoleDto>>> GetRoles()
         {
-            var currentUserId = GetCurrentUserId();
-
-            // Detailed authorization check (e.g., should user be able to see all roles?)
-            bool authorized = await _userService.CanUserViewAllRolesAsync(currentUserId);
-            if (!authorized)
+            try
             {
-                return Forbid(); // HTTP 403 Forbidden
-            }
+                var currentUserId = GetCurrentUserId();
 
-            var roles = await _roleService.GetAllRolesAsync();
-            return Ok(roles); // 200 OK
+                // Detailed authorization check
+                bool authorized = await _userService.CanUserViewAllRolesAsync(currentUserId);
+                if (!authorized)
+                {
+                    // ИСПРАВЛЕНИЕ: Используем StatusCode для возврата JSON тела с 403
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "You are not authorized to view all roles." });
+                }
+
+                var roles = await _roleService.GetAllRolesAsync();
+                return Ok(roles); // 200 OK
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // ИСПРАВЛЕНИЕ: Используем StatusCode для возврата JSON тела с 401
+                return StatusCode(StatusCodes.Status401Unauthorized, new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error in GetRoles: {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "An unexpected error occurred while fetching roles.", detail = ex.Message });
+            }
         }
 
         /// <summary>
         /// Gets a specific role by ID.
-        /// Requires Administrator, Teacher, or Student roles, and fine-grained permission.
+        /// Requires Administrator role, or the user's own role details.
         /// </summary>
         /// <param name="id">The ID of the role.</param>
         /// <returns>The Role DTO or NotFound if the role does not exist.</returns>
         [HttpGet("{id}")]
-        [Authorize(Roles = "Администратор,Преподаватель,Студент")] // Example: All authenticated users can view specific role details
+        [Authorize(Roles = $"{Administrator},{Teacher},{Student}")] // Все аутентифицированные пользователи могут просматривать детали роли
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
         public async Task<ActionResult<RoleDto>> GetRole(int id)
         {
-            var currentUserId = GetCurrentUserId();
-
-            // Detailed authorization check
-            bool authorized = await _userService.CanUserViewRoleDetailsAsync(currentUserId, id);
-            if (!authorized)
+            try
             {
-                return Forbid();
+                var currentUserId = GetCurrentUserId();
+
+                // Detailed authorization check
+                bool authorized = await _userService.CanUserViewRoleDetailsAsync(currentUserId, id);
+                if (!authorized)
+                {
+                    // ИСПРАВЛЕНИЕ: Используем StatusCode для возврата JSON тела с 403
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "You are not authorized to view this role's details." });
+                }
+
+                var role = await _roleService.GetRoleByIdAsync(id);
+
+                if (role == null)
+                {
+                    return NotFound(new { message = $"Role with ID {id} not found." }); // 404 Not Found
+                }
+
+                return Ok(role); // 200 OK
             }
-
-            var role = await _roleService.GetRoleByIdAsync(id);
-
-            if (role == null)
+            catch (UnauthorizedAccessException ex)
             {
-                return NotFound(); // 404 Not Found if the role ID doesn't exist
+                // ИСПРАВЛЕНИЕ: Используем StatusCode для возврата JSON тела с 401
+                return StatusCode(StatusCodes.Status401Unauthorized, new { message = ex.Message });
             }
-
-            return Ok(role); // 200 OK
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error in GetRole(id): {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "An unexpected error occurred while fetching role details.", detail = ex.Message });
+            }
         }
 
         /// <summary>
@@ -103,33 +133,54 @@ namespace StudentPerformance.Api.Controllers
         /// <param name="createRoleDto">The data for the new role.</param>
         /// <returns>The created Role DTO or BadRequest if creation fails.</returns>
         [HttpPost]
-        [Authorize(Roles = "Администратор")] // Only Administrators can create roles
+        [Authorize(Roles = Administrator)] // Only Administrators can create roles
         [ProducesResponseType(StatusCodes.Status201Created)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)] // For validation errors or business logic (e.g., duplicate name)
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)] // For ConflictException
         public async Task<ActionResult<RoleDto>> PostRole([FromBody] CreateRoleDto createRoleDto)
         {
-            var currentUserId = GetCurrentUserId();
-
-            // Detailed authorization check
-            bool authorized = await _userService.CanUserCreateRoleAsync(currentUserId);
-            if (!authorized)
+            if (!ModelState.IsValid)
             {
-                return Forbid();
+                return BadRequest(ModelState);
             }
 
-            var createdRole = await _roleService.CreateRoleAsync(createRoleDto);
-
-            if (createdRole == null)
+            try
             {
-                // This might indicate a business rule violation like "role name already exists"
-                // or other validation issues, if the service returns null for such cases.
-                return BadRequest("Failed to create role. Check request data (e.g., role name might not be unique).");
-            }
+                var currentUserId = GetCurrentUserId();
 
-            // Returns 201 Created status code and a Location header with the URI of the newly created resource.
-            return CreatedAtAction(nameof(GetRole), new { id = createdRole.RoleId }, createdRole);
+                // Detailed authorization check
+                bool authorized = await _userService.CanUserCreateRoleAsync(currentUserId);
+                if (!authorized)
+                {
+                    // ИСПРАВЛЕНИЕ: Используем StatusCode для возврата JSON тела с 403
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "You are not authorized to create roles." });
+                }
+
+                var createdRole = await _roleService.CreateRoleAsync(createRoleDto);
+
+                // Service methods should throw exceptions for failures instead of returning null for cleaner handling
+                return CreatedAtAction(nameof(GetRole), new { id = createdRole.RoleId }, createdRole); // 201 Created
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                // ИСПРАВЛЕНИЕ: Используем StatusCode для возврата JSON тела с 401
+                return StatusCode(StatusCodes.Status401Unauthorized, new { message = ex.Message });
+            }
+            catch (ConflictException ex) // Catch specific ConflictException
+            {
+                return Conflict(new { message = ex.Message }); // 409 Conflict
+            }
+            catch (ArgumentException ex) // For invalid arguments passed to service
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error in PostRole: {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "An unexpected error occurred while creating the role.", detail = ex.Message });
+            }
         }
 
         /// <summary>
@@ -140,40 +191,58 @@ namespace StudentPerformance.Api.Controllers
         /// <param name="updateRoleDto">The updated data for the role.</param>
         /// <returns>NoContent if successful, NotFound if the role doesn't exist, or BadRequest for invalid data.</returns>
         [HttpPut("{id}")]
-        [Authorize(Roles = "Администратор")] // Only Administrators can update roles
+        [Authorize(Roles = Administrator)] // Only Administrators can update roles
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)] // For ConflictException
         public async Task<IActionResult> PutRole(int id, [FromBody] UpdateRoleDto updateRoleDto)
         {
-            var currentUserId = GetCurrentUserId();
-
-            // Detailed authorization check
-            bool authorized = await _userService.CanUserUpdateRoleAsync(currentUserId, id);
-            if (!authorized)
+            if (!ModelState.IsValid)
             {
-                return Forbid();
+                return BadRequest(ModelState);
             }
 
-            // Basic validation for ID:
-            if (id <= 0)
+            try
             {
-                return BadRequest("Invalid Role ID."); // 400 Bad Request
+                var currentUserId = GetCurrentUserId();
+
+                // Detailed authorization check
+                bool authorized = await _userService.CanUserUpdateRoleAsync(currentUserId, id);
+                if (!authorized)
+                {
+                    // ИСПРАВЛЕНИЕ: Используем StatusCode для возврата JSON тела с 403
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "You are not authorized to update roles." });
+                }
+
+                await _roleService.UpdateRoleAsync(id, updateRoleDto); // Service should throw exceptions on failure
+
+                return NoContent(); // 204 No Content
             }
-
-            var updatedRoleDto = await _roleService.UpdateRoleAsync(id, updateRoleDto); // Service returns RoleDto?
-
-            if (updatedRoleDto == null) // Check if 'updatedRoleDto' is null
+            catch (UnauthorizedAccessException ex)
             {
-                // If update failed, it's likely because the role with 'id' was not found.
-                // Or due to other business logic (e.g., duplicate name).
-                // A more robust service might return an enum or specific error type for different failures.
-                return NotFound(); // 404 Not Found
+                // ИСПРАВЛЕНИЕ: Используем StatusCode для возврата JSON тела с 401
+                return StatusCode(StatusCodes.Status401Unauthorized, new { message = ex.Message });
             }
-
-            return NoContent(); // 204 No Content (standard for successful PUT with no body)
+            catch (NotFoundException ex) // Catch specific NotFoundException
+            {
+                return NotFound(new { message = ex.Message }); // 404 Not Found
+            }
+            catch (ConflictException ex) // Catch specific ConflictException
+            {
+                return Conflict(new { message = ex.Message }); // 409 Conflict
+            }
+            catch (ArgumentException ex) // For invalid arguments passed to service
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error in PutRole: {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "An unexpected error occurred while updating the role.", detail = ex.Message });
+            }
         }
 
         /// <summary>
@@ -183,33 +252,52 @@ namespace StudentPerformance.Api.Controllers
         /// <param name="id">The ID of the role to delete.</param>
         /// <returns>NoContent if successful, NotFound if the role does not exist.</returns>
         [HttpDelete("{id}")]
-        [Authorize(Roles = "Администратор")] // Only Administrators can delete roles
+        [Authorize(Roles = Administrator)] // Only Administrators can delete roles
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)] // For ConflictException (dependencies)
         public async Task<IActionResult> DeleteRole(int id)
         {
-            var currentUserId = GetCurrentUserId();
-
-            // Detailed authorization check
-            bool authorized = await _userService.CanUserDeleteRoleAsync(currentUserId, id);
-            if (!authorized)
+            try
             {
-                return Forbid();
+                var currentUserId = GetCurrentUserId();
+
+                // Detailed authorization check
+                bool authorized = await _userService.CanUserDeleteRoleAsync(currentUserId, id);
+                if (!authorized)
+                {
+                    // ИСПРАВЛЕНИЕ: Используем StatusCode для возврата JSON тела с 403
+                    return StatusCode(StatusCodes.Status403Forbidden, new { message = "You are not authorized to delete roles." });
+                }
+
+                await _roleService.DeleteRoleAsync(id); // Service should throw exceptions on failure
+
+                return NoContent(); // 204 No Content
             }
-
-            var deleted = await _roleService.DeleteRoleAsync(id); // Service returns bool
-
-            if (!deleted)
+            catch (UnauthorizedAccessException ex)
             {
-                // If deletion failed, likely because the role was not found.
-                // Or due to other business logic (e.g., cannot delete a role that has assigned users).
-                // A more robust service might return an enum or specific error type for different failures.
-                return NotFound(); // 404 Not Found
+                // ИСПРАВЛЕНИЕ: Используем StatusCode для возврата JSON тела с 401
+                return StatusCode(StatusCodes.Status401Unauthorized, new { message = ex.Message });
             }
-
-            return NoContent(); // 204 No Content
+            catch (NotFoundException ex) // Catch specific NotFoundException
+            {
+                return NotFound(new { message = ex.Message }); // 404 Not Found
+            }
+            catch (ConflictException ex) // Catch specific ConflictException (e.g., role has associated users)
+            {
+                return Conflict(new { message = ex.Message }); // 409 Conflict
+            }
+            catch (InvalidOperationException ex) // Catch for critical system roles check
+            {
+                return BadRequest(new { message = ex.Message }); // 400 Bad Request if it's a business rule violation
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Error in DeleteRole: {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, new { message = "An unexpected error occurred while deleting the role.", detail = ex.Message });
+            }
         }
     }
 }

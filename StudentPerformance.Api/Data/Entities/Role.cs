@@ -13,23 +13,22 @@ namespace StudentPerformance.Api.Data.Entities
         // Первичный ключ, генерируется БД
         [Key]
         [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
-        public int RoleId { get; set; } // Соответствует INT IDENTITY
+        public int RoleId { get; set; } // <-- Ваш первичный ключ называется RoleId
 
         // Обязательное поле для имени роли
         [Required]
-        [MaxLength(50)] // Соответствует nvarchar(50)
-        public string Name { get; set; } = string.Empty; // Название роли (например, "Администратор", "Преподаватель", "Студент")
+        [MaxLength(50)]
+        public string Name { get; set; } = string.Empty;
 
         // Описание роли, может быть NULL, с ограничением длины
-        [MaxLength(200)] // Соответствует nvarchar(200)
-        public string? Description { get; set; } // Описание роли (опционально)
+        [MaxLength(200)]
+        public string? Description { get; set; }
 
         // Поля для аудита (необязательно, но полезно)
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow; // Дата создания записи
-        public DateTime? UpdatedAt { get; set; } // Дата последнего обновления записи
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public DateTime? UpdatedAt { get; set; }
 
         // Обязательно: Навигационное свойство для связи "один-ко-многим" с User.
-        // Позволяет получить всех пользователей, которые имеют данную роль.
         public ICollection<User> Users { get; set; } = new List<User>();
     }
 }
