@@ -55,6 +55,16 @@ namespace StudentPerformance.Api
                 .ForMember(dest => dest.Teacher, opt => opt.Ignore())
                 .ForAllMembers(opt => opt.Condition((src, dest, srcMember) => srcMember != null)); // Update only non-null fields
 
+            // --- ДОБАВЛЕНО: Маппинг AddTeacherRequest к сущности User ---
+            // Этот маппинг необходим, потому что AddTeacherRequest содержит поля для создания User (пользователя)
+            // PasswordHash, RoleId/Role и навигационные свойства будут обрабатываться вручную в UserService или TeacherService.
+            CreateMap<AddTeacherRequest, User>()
+                .ForMember(dest => dest.PasswordHash, opt => opt.Ignore()) // Пароль будет хеширован сервисом
+                .ForMember(dest => dest.RoleId, opt => opt.Ignore())       // Роль будет установлена сервисом (например, через RoleId по имени "Teacher")
+                .ForMember(dest => dest.Role, opt => opt.Ignore())         // Игнорируем навигационное свойство Role
+                .ForMember(dest => dest.Student, opt => opt.Ignore())      // Игнорируем, так как это Teacher, а не Student
+                .ForMember(dest => dest.Teacher, opt => opt.Ignore());     // Игнорируем, так как сущность Teacher будет создаваться отдельно и связываться с этим User
+
 
             // --- Student Mappings ---
             // Maps a Student entity to a StudentDto.

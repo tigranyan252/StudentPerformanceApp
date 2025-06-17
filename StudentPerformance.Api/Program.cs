@@ -10,13 +10,13 @@ using Microsoft.OpenApi.Models;
 using AutoMapper;
 using StudentPerformance.Api.Data;
 using StudentPerformance.Api.Services;
-using StudentPerformance.Api.Services.Interfaces; // Убедитесь, что здесь есть IAssignmentService
+using StudentPerformance.Api.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Identity;
 using StudentPerformance.Api.Data.Entities;
-using StudentPerformance.Api.Utilities; // For IPasswordHasher<TUser> and MappingProfile
+using StudentPerformance.Api.Utilities;
 using System;
-using StudentPerformance.Api; // For InvalidOperationException
+using StudentPerformance.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,22 +28,15 @@ builder.Services.AddControllers();
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<IGradeService, GradeService>();
 builder.Services.AddScoped<IRoleService, RoleService>();
-
-// ИСПРАВЛЕНО: Регистрация сервиса для ОБЩИХ заданий (Assignment)
-builder.Services.AddScoped<IAssignmentService, AssignmentService>(); // <-- НОВОЕ: ЭТО БЫЛО ОТСУТСТВУЕТ!
-
-// ИСПРАВЛЕНО: Правильная регистрация сервиса для НАЗНАЧЕНИЙ (TeacherSubjectGroupAssignment)
+builder.Services.AddScoped<IAssignmentService, AssignmentService>();
 builder.Services.AddScoped<ITeacherSubjectGroupAssignmentService, TeacherSubjectGroupAssignmentService>();
-// УДАЛЕНО: Дублирующаяся строка для ITeacherSubjectGroupAssignmentService
-
 builder.Services.AddScoped<IGroupService, GroupService>();
 builder.Services.AddScoped<ISubjectService, SubjectService>();
 builder.Services.AddScoped<ISemesterService, SemesterService>();
 builder.Services.AddScoped<IStudentService, StudentService>();
 builder.Services.AddScoped<ITeacherService, TeacherService>();
-
-// НОВАЯ СТРОКА: Регистрация сервиса отчетов
 builder.Services.AddScoped<IReportService, ReportService>();
+
 
 // Register IPasswordHasher for hashing passwords
 builder.Services.AddScoped<IPasswordHasher<User>, SimplePasswordHasher>();
@@ -59,6 +52,9 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 var jwtSecret = builder.Configuration["JwtSettings:Secret"];
 var jwtIssuer = builder.Configuration["JwtSettings:Issuer"];
 var jwtAudience = builder.Configuration["JwtSettings:Audience"];
+// Добавлена настройка времени жизни токена из конфигурации.
+// По умолчанию 15 минут, если в appsettings.json не указано.
+var accessTokenExpirationMinutes = builder.Configuration.GetValue<int>("JwtSettings:AccessTokenExpirationMinutes", 15);
 
 if (string.IsNullOrEmpty(jwtSecret))
 {
@@ -84,7 +80,14 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             ValidIssuer = jwtIssuer,
             ValidAudience = jwtAudience,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
+            // Увеличена ClockSkew для удобства тестирования.
+            // ClockSkew - это допустимое отклонение времени между сервером, выдавшим токен,
+            // и сервером, его проверяющим. Это позволяет обрабатывать небольшие рассинхронизации.
+            // Если токен истекает слишком быстро, убедитесь, что его фактическое время жизни
+            // (параметр 'expires' при создании токена в AuthService) также достаточно велико
+            // (например, DateTime.UtcNow.AddMinutes(accessTokenExpirationMinutes)).
+            ClockSkew = TimeSpan.FromMinutes(accessTokenExpirationMinutes)
         };
     });
 
@@ -127,7 +130,7 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy(name: AllowReactAppSpecificOrigins, policy =>
     {
-        policy.WithOrigins("http://localhost:3000")
+        policy.WithOrigins("http://localhost:3000") // Или другие фронтенд-источники
               .AllowAnyMethod()
               .AllowAnyHeader()
               .AllowCredentials();
@@ -162,6 +165,7 @@ if (app.Environment.IsDevelopment())
 }
 else
 {
+    // В продакшене рекомендуется использовать HTTPS
     app.UseHsts();
     app.UseHttpsRedirection();
 }
@@ -169,8 +173,8 @@ else
 app.UseCors(AllowReactAppSpecificOrigins); // CORS must be before UseRouting, UseAuthentication, UseAuthorization
 
 app.UseRouting();
-app.UseAuthentication();
-app.UseAuthorization();
+app.UseAuthentication(); // JWT authentication
+app.UseAuthorization(); // Role-based authorization
 
 app.MapControllers(); // Maps controller routes
 
